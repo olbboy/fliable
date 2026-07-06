@@ -64,7 +64,21 @@ impossible, including parent/child cycles.
 **One scheduler goroutine.** Timers, async continuations, retries and
 timer-start events are all `store.Job` records claimed atomically by
 `DueJobs`. The scheduler polls (default 100 ms); tests inject a virtual
-clock and call `RunDueJobs` directly for deterministic time.
+clock and call `RunDueJobs` directly for deterministic time. A claimed
+job whose execution fails is re-queued with backoff and eventually
+surfaces as an incident — never silently dropped.
+
+**Handlers run under the instance lock.** Service handlers and OnEvent
+listeners execute while the instance's stripe lock is held: they must not
+call engine methods synchronously (return output variables, use external
+worker topics, or hand off to a goroutine instead), or they can deadlock.
+
+**Startup reconciliation.** `Start()` first repairs the small
+at-least-once windows a crash can leave behind: call-activity children
+that were never started (→ resolvable incident) or whose completion never
+reached the parent (→ parent resumed), wait states whose claimed job was
+lost (→ re-armed), and orphaned task records (→ cancelled). Broken states
+become visible incidents, never silent hangs.
 
 ## Scopes, boundaries, errors
 

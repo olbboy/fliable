@@ -209,6 +209,9 @@ func (rt *runtime) moveOver(tok *store.Token, flows []*bpmn.SequenceFlow) error 
 		sib := rt.spawnToken(f.TargetRef, tok.ScopePath, tok.ScopeOwners, tok.Parent, nil)
 		sib.ArrivedFlow = f.ID
 		sib.LocalVars = cloneLocals(tok.LocalVars)
+		if err := rt.maybeAsync(sib); err != nil {
+			return err
+		}
 	}
 	tok.ElementID = flows[0].TargetRef
 	tok.ArrivedFlow = flows[0].ID
@@ -846,6 +849,7 @@ func (rt *runtime) createEventWait(tok *store.Token, el *bpmn.Element, ev *bpmn.
 			DueAt:      due,
 			Repeats:    repeats,
 			Interval:   interval,
+			Retries:    3,
 			CreatedAt:  rt.e.now(),
 		}
 		if err := rt.e.st.PutJob(job); err != nil {
@@ -925,9 +929,17 @@ func (rt *runtime) throwError(tok *store.Token, code, message string) {
 	c := rt.scope(tok)
 	for _, b := range c.BoundaryEvents(tok.ElementID) {
 		if b.Event.Kind == bpmn.KindError && (b.Event.ErrorCode == "" || b.Event.ErrorCode == code) {
-			rt.cancelWaits(tok)
 			rt.inst.Variables["errorCode"] = code
 			rt.inst.Variables["errorMessage"] = message
+			// An error escaping one multi-instance iteration cancels the
+			// whole loop; the boundary path continues once, with the
+			// coordinator token.
+			if coord := rt.miCoordinatorFor(tok); coord != nil {
+				rt.cancelWaits(coord) // sweeps all iterations incl. tok
+				rt.moveToBoundary(coord, b)
+				return
+			}
+			rt.cancelWaits(tok)
 			rt.moveToBoundary(tok, b)
 			return
 		}
@@ -935,6 +947,15 @@ func (rt *runtime) throwError(tok *store.Token, code, message string) {
 	rt.cancelWaits(tok)
 	delete(rt.inst.Tokens, tok.ID)
 	rt.propagateError(tok, code, message)
+}
+
+// miCoordinatorFor returns the multi-instance coordinator token when tok
+// is a loop iteration, or nil.
+func (rt *runtime) miCoordinatorFor(tok *store.Token) *store.Token {
+	if tok == nil || tok.Parent == "" || rt.inst.Multi[tok.Parent] == nil {
+		return nil
+	}
+	return rt.inst.Tokens[tok.Parent]
 }
 
 // propagateError walks scopes outward looking for an error handler
@@ -981,7 +1002,16 @@ func (rt *runtime) propagateError(tok *store.Token, code, message string) {
 						rt.killScopeTokens(scopePath, scopeOwners, "")
 						rt.inst.Variables["errorCode"] = code
 						rt.inst.Variables["errorMessage"] = message
-						if owner := rt.inst.Tokens[ownerID]; owner != nil && owner.ElementID == scopeID {
+						owner := rt.inst.Tokens[ownerID]
+						// A failing iteration of a multi-instance
+						// sub-process cancels the entire loop; the
+						// coordinator continues down the boundary path.
+						if coord := rt.miCoordinatorFor(owner); coord != nil {
+							rt.cancelWaits(coord)
+							rt.moveToBoundary(coord, b)
+							return
+						}
+						if owner != nil && owner.ElementID == scopeID {
 							rt.cancelBoundaries(owner)
 							owner.ElementID = b.ID
 							owner.State = store.TokenActive

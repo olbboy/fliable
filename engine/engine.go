@@ -36,6 +36,12 @@ import (
 // variables to merge into the instance, or an error. Return a *BPMNError
 // to throw a catchable BPMN error; any other error triggers the retry /
 // incident cycle.
+//
+// Handlers run while the instance's lock is held: they MUST NOT call
+// engine methods synchronously (SetVariables, CompleteTask,
+// CorrelateMessage, ...) or they can deadlock. Return output variables
+// instead, or hand work to a goroutine / external worker topic. The same
+// applies to OnEvent listeners.
 type ServiceHandler func(ctx Context) (map[string]any, error)
 
 // Context is the read view a service handler gets.
@@ -187,15 +193,94 @@ func (e *Engine) OnEvent(fn func(*store.HistoryEvent)) {
 	e.listeners = append(e.listeners, fn)
 }
 
-// Start launches the background scheduler (timers, async continuations,
-// retries). Safe to call once.
+// Start reconciles persisted state (crash recovery) and launches the
+// background scheduler (timers, async continuations, retries). Safe to
+// call once.
 func (e *Engine) Start() {
 	if !e.running.CompareAndSwap(false, true) {
 		return
 	}
+	e.reconcile()
 	e.stop = make(chan struct{})
 	e.stopped = make(chan struct{})
 	go e.schedulerLoop()
+}
+
+// reconcile repairs the small at-least-once windows a crash can leave
+// behind: call-activity children that were never started or whose
+// completion never reached the parent, wait states whose claimed job was
+// lost, and side records that ran ahead of the instance snapshot. Broken
+// states become resolvable incidents — never silent hangs.
+func (e *Engine) reconcile() {
+	insts, err := e.st.ListInstances(store.InstanceFilter{State: store.InstanceActive})
+	if err != nil {
+		e.log.Error("reconcile: list instances failed", "error", err)
+		return
+	}
+	for _, snapshot := range insts {
+		instID := snapshot.ID
+		err := e.resume(instID, func(rt *runtime) (bool, error) {
+			changed := false
+			for _, tok := range rt.inst.Tokens {
+				switch tok.State {
+				case store.TokenWaitChild:
+					if tok.WaitRef == scopeWaitRef {
+						continue
+					}
+					child, err := e.st.GetInstance(tok.WaitRef)
+					switch {
+					case errors.Is(err, store.ErrNotFound):
+						rt.raiseIncident(tok, "", "call-activity child instance was never started (crash during handoff); resolve to retry")
+						changed = true
+					case err == nil && child.State != store.InstanceActive:
+						// The child ended but the parent was never told.
+						el := rt.element(tok)
+						if el != nil {
+							for _, m := range el.Outputs {
+								if v, err := expr.Eval(m.Source, child.Variables); err == nil {
+									rt.inst.Variables[m.Target] = v
+								}
+							}
+						}
+						rt.completeActivity(tok)
+						changed = true
+					}
+				case store.TokenWaitTask:
+					task, err := e.st.GetTask(tok.WaitRef)
+					if err == nil && task.State != store.TaskCreated {
+						rt.raiseIncident(tok, "", "user task record finished but the flow never advanced (crash during completion); resolve to recreate the task")
+						changed = true
+					}
+				case store.TokenWaitTimer, store.TokenWaitRetry:
+					if !strings.HasPrefix(tok.WaitRef, "job_") {
+						continue // incident references are handled via ResolveIncident
+					}
+					if _, err := e.st.GetJob(tok.WaitRef); errors.Is(err, store.ErrNotFound) {
+						// The claimed job was lost before execution:
+						// re-activate the element so it re-arms itself.
+						tok.State = store.TokenActive
+						tok.WaitRef = ""
+						changed = true
+					}
+				}
+			}
+			return changed, nil
+		})
+		if err != nil {
+			e.log.Warn("reconcile failed for instance", "instance", instID, "error", err)
+		}
+	}
+	// Cancel task records orphaned by instances that ended mid-cleanup.
+	if tasks, err := e.st.ListTasks(store.TaskFilter{State: store.TaskCreated}); err == nil {
+		for _, t := range tasks {
+			inst, err := e.st.GetInstance(t.InstanceID)
+			if err == nil && inst.State == store.InstanceActive {
+				continue
+			}
+			t.State = store.TaskCanceled
+			_ = e.st.PutTask(t)
+		}
+	}
 }
 
 // Stop halts the scheduler and waits for it to drain.
@@ -338,6 +423,7 @@ func (e *Engine) registerStartTriggers(def *store.Definition, proc *bpmn.Process
 				DueAt:         due,
 				Repeats:       repeats,
 				Interval:      interval,
+				Retries:       3,
 				CreatedAt:     e.now(),
 			}
 			if err := e.st.PutJob(job); err != nil {
@@ -436,12 +522,18 @@ func (e *Engine) startInstance(defID, presetID, businessKey string, vars map[str
 
 	e.metrics.InstancesStarted.Add(1)
 	rt := &runtime{e: e, pd: pd, inst: inst}
-	rt.emit(store.HistInstanceStarted, start.ID, map[string]any{"businessKey": businessKey, "definitionKey": pd.def.Key, "version": float64(pd.def.Version)})
-	rt.registerEventSubprocesses(&pd.proc.Container, nil, "")
 
 	mu := e.lockFor(inst.ID)
 	mu.Lock()
-	err = rt.drain()
+	// Persist the instance record before creating any jobs/subscriptions
+	// that reference it: the scheduler may otherwise claim an
+	// immediately-due timer and fail to load the instance.
+	err = e.st.PutInstance(inst)
+	if err == nil {
+		rt.emit(store.HistInstanceStarted, start.ID, map[string]any{"businessKey": businessKey, "definitionKey": pd.def.Key, "version": float64(pd.def.Version)})
+		rt.registerEventSubprocesses(&pd.proc.Container, nil, "")
+		err = rt.drain()
+	}
 	if err == nil {
 		err = e.st.PutInstance(inst)
 	}
@@ -532,20 +624,31 @@ func (e *Engine) SetVariables(id string, vars map[string]any) error {
 // ---- user tasks ------------------------------------------------------------------
 
 // ClaimTask assigns a task to a user (fails if already claimed by someone
-// else).
+// else). It runs under the instance lock so it cannot race task
+// completion or cancellation.
 func (e *Engine) ClaimTask(taskID, user string) error {
 	t, err := e.st.GetTask(taskID)
 	if err != nil {
 		return err
 	}
-	if t.State != store.TaskCreated {
-		return fmt.Errorf("engine: task %s is %s", taskID, t.State)
-	}
-	if t.Assignee != "" && t.Assignee != user {
-		return fmt.Errorf("engine: task %s already assigned to %s", taskID, t.Assignee)
-	}
-	t.Assignee = user
-	return e.st.PutTask(t)
+	return e.resume(t.InstanceID, func(rt *runtime) (bool, error) {
+		t, err := e.st.GetTask(taskID) // re-read under the lock
+		if err != nil {
+			return false, err
+		}
+		if t.State != store.TaskCreated {
+			return false, fmt.Errorf("engine: task %s is %s", taskID, t.State)
+		}
+		tok := rt.inst.Tokens[t.TokenID]
+		if tok == nil || tok.State != store.TokenWaitTask || tok.WaitRef != t.ID {
+			return false, fmt.Errorf("engine: task %s is no longer active", taskID)
+		}
+		if t.Assignee != "" && t.Assignee != user {
+			return false, fmt.Errorf("engine: task %s already assigned to %s", taskID, t.Assignee)
+		}
+		t.Assignee = user
+		return false, e.st.PutTask(t)
+	})
 }
 
 // CompleteTask finishes a user task, merging vars into the instance and
@@ -577,6 +680,7 @@ func (e *Engine) CompleteTask(taskID string, vars map[string]any, user string) e
 		el := rt.element(tok)
 		if el != nil {
 			rt.applyOutputs(el, tok)
+			rt.clearInputLocals(el, tok)
 		}
 		rt.completeActivity(tok)
 		return true, nil
@@ -605,11 +709,14 @@ func (e *Engine) CorrelateMessage(name, correlationKey string, vars map[string]a
 		if correlationKey != "" && sub.CorrelationKey != correlationKey {
 			continue
 		}
-		if err := e.triggerSubscription(sub, vars, store.HistMessageReceived); err != nil {
+		ok, err := e.triggerSubscription(sub, vars, store.HistMessageReceived)
+		if err != nil {
 			e.log.Warn("message trigger failed", "subscription", sub.ID, "error", err)
 			continue
 		}
-		count++
+		if ok {
+			count++
+		}
 	}
 	// Start events: only when the message did not target a waiting
 	// instance, or always? BPMN semantics: a message is delivered once;
@@ -656,18 +763,24 @@ func (e *Engine) BroadcastSignal(name string, vars map[string]any) (int, error) 
 			count++
 			continue
 		}
-		if err := e.triggerSubscription(sub, vars, store.HistSignalReceived); err != nil {
+		ok, err := e.triggerSubscription(sub, vars, store.HistSignalReceived)
+		if err != nil {
 			e.log.Warn("signal trigger failed", "subscription", sub.ID, "error", err)
 			continue
 		}
-		count++
+		if ok {
+			count++
+		}
 	}
 	return count, nil
 }
 
-// triggerSubscription resumes the token waiting on a subscription.
-func (e *Engine) triggerSubscription(sub *store.Subscription, vars map[string]any, histType string) error {
-	return e.resume(sub.InstanceID, func(rt *runtime) (bool, error) {
+// triggerSubscription resumes the token waiting on a subscription. It
+// reports whether anything was actually activated, so callers count
+// deliveries correctly.
+func (e *Engine) triggerSubscription(sub *store.Subscription, vars map[string]any, histType string) (bool, error) {
+	activated := false
+	err := e.resume(sub.InstanceID, func(rt *runtime) (bool, error) {
 		// The subscription may have been cancelled by a concurrent path.
 		still, err := e.st.ListSubscriptions(store.SubscriptionFilter{InstanceID: sub.InstanceID})
 		if err != nil {
@@ -685,9 +798,21 @@ func (e *Engine) triggerSubscription(sub *store.Subscription, vars map[string]an
 		for k, v := range vars {
 			rt.inst.Variables[k] = expr.Normalize(v)
 		}
+		ok, err := rt.eventTriggered(sub.TokenID, sub.ElementID, sub.ID)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			// Orphaned subscription (its wait state is gone): remove it
+			// so it can never swallow future deliveries.
+			_ = e.st.DeleteSubscription(sub.ID)
+			return false, nil
+		}
+		activated = true
 		rt.emit(histType, sub.ElementID, map[string]any{"name": sub.Name})
-		return rt.eventTriggered(sub.TokenID, sub.ElementID, sub.ID)
+		return true, nil
 	})
+	return activated, err
 }
 
 // ---- external worker tasks ---------------------------------------------------------------
@@ -728,6 +853,7 @@ func (e *Engine) CompleteExternalTask(id, workerID string, vars map[string]any) 
 		rt.emit(store.HistElementCompleted, tok.ElementID, map[string]any{"worker": workerID})
 		if el != nil {
 			rt.applyOutputs(el, tok)
+			rt.clearInputLocals(el, tok)
 		}
 		rt.completeActivity(tok)
 		return true, nil

@@ -1,6 +1,10 @@
 package engine
 
 import (
+	"errors"
+	"fmt"
+	"strings"
+
 	"github.com/olbboy/fliable/store"
 )
 
@@ -70,7 +74,7 @@ func (e *Engine) executeJob(job *store.Job) {
 			return rt.timerFired(job)
 		})
 		if err != nil {
-			e.log.Warn("timer job skipped", "job", job.ID, "instance", job.InstanceID, "error", err)
+			e.requeueFailedJob(job, err)
 		}
 
 	case store.JobAsync, store.JobRetry:
@@ -84,7 +88,43 @@ func (e *Engine) executeJob(job *store.Job) {
 			return true, nil
 		})
 		if err != nil {
-			e.log.Warn("continuation job skipped", "job", job.ID, "instance", job.InstanceID, "error", err)
+			e.requeueFailedJob(job, err)
 		}
 	}
+}
+
+// requeueFailedJob keeps at-least-once semantics: DueJobs removed the job
+// from the store before execution, so a failed execution must put it back
+// (with a fresh due time) or surface an incident — never drop it silently.
+func (e *Engine) requeueFailedJob(job *store.Job, cause error) {
+	msg := cause.Error()
+	if errors.Is(cause, store.ErrNotFound) ||
+		strings.Contains(msg, "is completed") || strings.Contains(msg, "is terminated") {
+		// The instance is gone; the job is genuinely obsolete.
+		e.log.Debug("job dropped, instance ended", "job", job.ID, "error", cause)
+		return
+	}
+	if job.Retries > 1 {
+		retry := *job
+		retry.Retries--
+		retry.DueAt = e.now().Add(e.retryBackoff)
+		if err := e.st.PutJob(&retry); err == nil {
+			e.log.Warn("job execution failed, requeued", "job", job.ID, "error", cause)
+			return
+		}
+	}
+	inc := &store.Incident{
+		ID:         e.newID("incd"),
+		InstanceID: job.InstanceID,
+		TokenID:    job.TokenID,
+		ElementID:  job.ElementID,
+		Message:    fmt.Sprintf("job %s (%s) failed permanently: %v", job.ID, job.Kind, cause),
+		CreatedAt:  e.now(),
+	}
+	if err := e.st.PutIncident(inc); err != nil {
+		e.log.Error("job failed and incident write failed", "job", job.ID, "cause", cause, "error", err)
+		return
+	}
+	e.metrics.IncidentsCreated.Add(1)
+	e.log.Error("job failed permanently, incident raised", "job", job.ID, "incident", inc.ID, "error", cause)
 }

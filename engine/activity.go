@@ -27,6 +27,13 @@ func (rt *runtime) activity(tok *store.Token, el *bpmn.Element) error {
 		rt.raiseIncident(tok, "", fmt.Sprintf("input mapping on %s: %v", el.ID, err))
 		return nil
 	}
+	// Boundary events arm when the activity starts — including for
+	// synchronous tasks, whose retry backoffs can park the token for a
+	// long time. Multi-instance children skip this: the loop coordinator
+	// carries the single boundary registration for the whole loop.
+	if !isMIChild(tok, el) {
+		rt.registerBoundaries(tok, el)
+	}
 	switch el.Type {
 	case bpmn.TypeUserTask:
 		return rt.userTask(tok, el)
@@ -117,7 +124,6 @@ func (rt *runtime) userTask(tok *store.Token, el *bpmn.Element) error {
 	if err := rt.e.st.PutTask(task); err != nil {
 		return err
 	}
-	rt.registerBoundaries(tok, el)
 	tok.State = store.TokenWaitTask
 	tok.WaitRef = task.ID
 	rt.e.metrics.TasksCreated.Add(1)
@@ -163,7 +169,6 @@ func (rt *runtime) serviceTask(tok *store.Token, el *bpmn.Element) error {
 		if err := rt.e.st.PutExternalTask(ext); err != nil {
 			return err
 		}
-		rt.registerBoundaries(tok, el)
 		tok.State = store.TokenWaitExternal
 		tok.WaitRef = ext.ID
 		rt.e.metrics.ExternalCreated.Add(1)
@@ -314,7 +319,6 @@ func (rt *runtime) businessRuleTask(tok *store.Token, el *bpmn.Element) error {
 // ---- receive task -----------------------------------------------------------------------
 
 func (rt *runtime) receiveTask(tok *store.Token, el *bpmn.Element) error {
-	rt.registerBoundaries(tok, el)
 	tok.State = store.TokenWaitMessage
 	return rt.createEventWait(tok, el, el.Event, true)
 }
@@ -327,7 +331,6 @@ func (rt *runtime) enterSubProcess(tok *store.Token, el *bpmn.Element) error {
 		rt.raiseIncident(tok, "", fmt.Sprintf("sub-process %s has no none start event", el.ID))
 		return nil
 	}
-	rt.registerBoundaries(tok, el)
 	tok.State = store.TokenWaitChild
 	tok.WaitRef = scopeWaitRef
 	childPath := append(append([]string(nil), tok.ScopePath...), el.ID)
@@ -359,7 +362,6 @@ func (rt *runtime) callActivity(tok *store.Token, el *bpmn.Element) error {
 		}
 	}
 	childID := rt.e.newID("inst")
-	rt.registerBoundaries(tok, el)
 	tok.State = store.TokenWaitChild
 	tok.WaitRef = childID
 
@@ -462,6 +464,7 @@ func (rt *runtime) registerEventSubprocesses(c *bpmn.Container, scopePath []stri
 					DueAt:      due,
 					Repeats:    repeats,
 					Interval:   interval,
+					Retries:    3,
 					CreatedAt:  rt.e.now(),
 				}
 				if err := rt.e.st.PutJob(job); err != nil {
