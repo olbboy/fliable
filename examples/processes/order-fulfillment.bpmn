@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:fliable="https://fliable.dev/schema/1.0"
+             id="orderDefs" targetNamespace="https://fliable.dev/examples">
+  <message id="msgPayment" name="paymentReceived"/>
+  <error id="errStock" name="OutOfStock" errorCode="OUT_OF_STOCK"/>
+  <process id="orderFulfillment" name="Order fulfillment" isExecutable="true">
+    <startEvent id="orderReceived" name="Order received"/>
+    <sequenceFlow id="f1" sourceRef="orderReceived" targetRef="scoreOrder"/>
+
+    <businessRuleTask id="scoreOrder" name="Score order risk"
+                      fliable:decisionRef="orderRisk" fliable:resultVariable="risk"/>
+    <sequenceFlow id="f2" sourceRef="scoreOrder" targetRef="riskGateway"/>
+
+    <exclusiveGateway id="riskGateway" name="Risky?" default="fAuto"/>
+    <sequenceFlow id="fManual" sourceRef="riskGateway" targetRef="manualReview">
+      <conditionExpression xsi:type="tFormalExpression">risk == 'high'</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="fAuto" sourceRef="riskGateway" targetRef="waitPayment"/>
+
+    <userTask id="manualReview" name="Manual review" fliable:candidateGroups="fraud-team"
+              fliable:formKey="forms/review" fliable:dueDate="PT24H"/>
+    <boundaryEvent id="reviewTimeout" attachedToRef="manualReview">
+      <timerEventDefinition><timeDuration>PT72H</timeDuration></timerEventDefinition>
+    </boundaryEvent>
+    <sequenceFlow id="f3" sourceRef="manualReview" targetRef="reviewGateway"/>
+    <sequenceFlow id="fTimeout" sourceRef="reviewTimeout" targetRef="rejected"/>
+
+    <exclusiveGateway id="reviewGateway" default="fReject"/>
+    <sequenceFlow id="fApproved" sourceRef="reviewGateway" targetRef="waitPayment">
+      <conditionExpression xsi:type="tFormalExpression">approved == true</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="fReject" sourceRef="reviewGateway" targetRef="rejected"/>
+
+    <intermediateCatchEvent id="waitPayment" name="Wait for payment">
+      <messageEventDefinition messageRef="msgPayment"/>
+    </intermediateCatchEvent>
+    <sequenceFlow id="f4" sourceRef="waitPayment" targetRef="pickItems"/>
+
+    <serviceTask id="pickItems" name="Pick items" fliable:topic="warehouse" fliable:retries="5"/>
+    <boundaryEvent id="noStock" attachedToRef="pickItems">
+      <errorEventDefinition errorRef="errStock"/>
+    </boundaryEvent>
+    <sequenceFlow id="f5" sourceRef="pickItems" targetRef="shipParcels"/>
+    <sequenceFlow id="fNoStock" sourceRef="noStock" targetRef="rejected"/>
+
+    <serviceTask id="shipParcels" name="Ship parcels" fliable:topic="shipping">
+      <multiInstanceLoopCharacteristics isSequential="false"
+        fliable:collection="parcels" fliable:elementVariable="parcel"/>
+    </serviceTask>
+    <sequenceFlow id="f6" sourceRef="shipParcels" targetRef="done"/>
+
+    <endEvent id="done" name="Fulfilled"/>
+    <endEvent id="rejected" name="Rejected"/>
+  </process>
+</definitions>

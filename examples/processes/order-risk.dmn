@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="https://www.omg.org/spec/DMN/20191111/MODEL/" id="orderRiskDefs" name="Order risk">
+  <decision id="orderRisk" name="Order risk">
+    <decisionTable hitPolicy="FIRST">
+      <input label="Amount"><inputExpression typeRef="number"><text>amount</text></inputExpression></input>
+      <input label="Customer age (days)"><inputExpression typeRef="number"><text>customerAgeDays ?? 0</text></inputExpression></input>
+      <output name="risk" label="Risk"/>
+      <rule>
+        <inputEntry><text>&gt; 5000</text></inputEntry>
+        <inputEntry><text>-</text></inputEntry>
+        <outputEntry><text>"high"</text></outputEntry>
+      </rule>
+      <rule>
+        <inputEntry><text>&gt; 500</text></inputEntry>
+        <inputEntry><text>&lt; 30</text></inputEntry>
+        <outputEntry><text>"high"</text></outputEntry>
+      </rule>
+      <rule>
+        <inputEntry><text>-</text></inputEntry>
+        <inputEntry><text>-</text></inputEntry>
+        <outputEntry><text>"low"</text></outputEntry>
+      </rule>
+    </decisionTable>
+  </decision>
+</definitions>
