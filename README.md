@@ -142,6 +142,13 @@ BenchmarkProcessExecution-4    ~8,000 full instance lifecycles/sec/core
 
 One "lifecycle" is the complete journey — start event, script task with expression evaluation, exclusive gateway, service task handler, end event, ~10 event-sourced history writes — through the in-memory store. There is no database round-trip and no lock-contention cliff: instances are serialized only against themselves.
 
+## Documentation
+
+- [Architecture](docs/architecture.md) — execution model, locking, persistence, determinism
+- [BPMN coverage & semantics](docs/bpmn-coverage.md)
+- [Expression language](docs/expressions.md)
+- [REST API reference](docs/rest-api.md)
+
 ## Repository layout
 
 ```
