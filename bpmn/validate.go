@@ -149,8 +149,9 @@ func validateContainer(c *Container, scope string, isProcess bool, addf func(str
 			}
 		}
 
-		// Every non-end, non-throw node should lead somewhere.
-		if len(el.Outgoing) == 0 {
+		// Every non-end, non-throw node should lead somewhere. Event
+		// sub-processes legitimately have no flows.
+		if len(el.Outgoing) == 0 && !el.TriggeredByEvent {
 			switch el.Type {
 			case TypeEndEvent, TypeIntermediateThrowEvent, TypeBoundaryEvent, TypeStartEvent:
 				// already reported or legal

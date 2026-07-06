@@ -100,6 +100,9 @@ func buildContainer(defs *Definitions, xc xContainer) (*Container, error) {
 		}
 		el.Event = ev
 		el.FormKey = x.FormKey.value()
+		// Event sub-process start events may be non-interrupting; reuse
+		// CancelActivity ("true" unless explicitly disabled).
+		el.CancelActivity = x.Interrupting == "" || x.Interrupting == "true"
 		if err := add(el); err != nil {
 			return nil, err
 		}
@@ -567,7 +570,8 @@ type xErrorDef struct {
 type xCatchEvent struct {
 	xFlowNode
 	xEventDefs
-	FormKey extAttr `xml:"formKey,attr"`
+	FormKey      extAttr `xml:"formKey,attr"`
+	Interrupting string  `xml:"isInterrupting,attr"`
 }
 
 type xBoundary struct {

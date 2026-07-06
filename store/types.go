@@ -149,12 +149,15 @@ const (
 // Job is a due-at-some-time unit of engine work (timer fire, async
 // continuation, service retry).
 type Job struct {
-	ID         string    `json:"id"`
-	Kind       JobKind   `json:"kind"`
-	InstanceID string    `json:"instanceId"`
-	TokenID    string    `json:"tokenId"`
-	ElementID  string    `json:"elementId"`
-	DueAt      time.Time `json:"dueAt"`
+	ID         string  `json:"id"`
+	Kind       JobKind `json:"kind"`
+	InstanceID string  `json:"instanceId"`
+	// DefinitionKey is set instead of InstanceID for timer-start jobs that
+	// create a new instance when they fire.
+	DefinitionKey string    `json:"definitionKey,omitempty"`
+	TokenID       string    `json:"tokenId"`
+	ElementID     string    `json:"elementId"`
+	DueAt         time.Time `json:"dueAt"`
 	// Repeats is the remaining repetition count for cycle timers
 	// (-1 = unbounded).
 	Repeats  int           `json:"repeats,omitempty"`
