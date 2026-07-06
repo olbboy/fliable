@@ -18,24 +18,40 @@ func (rt *runtime) env(tok *store.Token) map[string]any {
 		out[k] = v
 	}
 	if tok != nil {
-		// Collect the parent chain so outer locals apply first.
-		var chain []*store.Token
-		for t := tok; t != nil; t = rt.inst.Tokens[t.Parent] {
-			chain = append(chain, t)
-			if t.Parent == "" {
-				break
+		// Scope owner tokens carry locals visible inside their scope
+		// (e.g. the multi-instance element variable on a sub-process
+		// iteration); apply outermost scope first.
+		for _, ownerID := range tok.ScopeOwners {
+			if ownerID == "" {
+				continue
+			}
+			if owner := rt.inst.Tokens[ownerID]; owner != nil {
+				applyParentChainLocals(rt, out, owner)
 			}
 		}
-		for i := len(chain) - 1; i >= 0; i-- {
-			for k, v := range chain[i].LocalVars {
-				out[k] = v
-			}
-		}
+		applyParentChainLocals(rt, out, tok)
 	}
 	out["instanceId"] = rt.inst.ID
 	out["businessKey"] = rt.inst.BusinessKey
 	out["definitionKey"] = rt.inst.DefinitionKey
 	return out
+}
+
+// applyParentChainLocals overlays a token's local variables, walking its
+// parent chain so outer locals apply first.
+func applyParentChainLocals(rt *runtime, out map[string]any, tok *store.Token) {
+	var chain []*store.Token
+	for t := tok; t != nil; t = rt.inst.Tokens[t.Parent] {
+		chain = append(chain, t)
+		if t.Parent == "" {
+			break
+		}
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		for k, v := range chain[i].LocalVars {
+			out[k] = v
+		}
+	}
 }
 
 // timerSchedule computes the first due time (and repetition data for

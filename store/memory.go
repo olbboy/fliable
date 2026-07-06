@@ -511,6 +511,7 @@ func cloneInstance(in *Instance) *Instance {
 	for id, tok := range in.Tokens {
 		t := *tok
 		t.ScopePath = append([]string(nil), tok.ScopePath...)
+		t.ScopeOwners = append([]string(nil), tok.ScopeOwners...)
 		if tok.LocalVars != nil {
 			t.LocalVars = cloneMap(tok.LocalVars)
 		}

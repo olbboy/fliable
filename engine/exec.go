@@ -206,7 +206,7 @@ func (rt *runtime) takeOutgoing(tok *store.Token, el *bpmn.Element) error {
 // rest.
 func (rt *runtime) moveOver(tok *store.Token, flows []*bpmn.SequenceFlow) error {
 	for _, f := range flows[1:] {
-		sib := rt.spawnToken(f.TargetRef, tok.ScopePath, tok.Parent, nil)
+		sib := rt.spawnToken(f.TargetRef, tok.ScopePath, tok.ScopeOwners, tok.Parent, nil)
 		sib.ArrivedFlow = f.ID
 		sib.LocalVars = cloneLocals(tok.LocalVars)
 	}
@@ -242,14 +242,15 @@ func (rt *runtime) maybeAsync(tok *store.Token) error {
 	return nil
 }
 
-func (rt *runtime) spawnToken(elementID string, scopePath []string, parent string, locals map[string]any) *store.Token {
+func (rt *runtime) spawnToken(elementID string, scopePath, scopeOwners []string, parent string, locals map[string]any) *store.Token {
 	t := &store.Token{
-		ID:        rt.e.newID("tok"),
-		ElementID: elementID,
-		State:     store.TokenActive,
-		ScopePath: append([]string(nil), scopePath...),
-		Parent:    parent,
-		LocalVars: locals,
+		ID:          rt.e.newID("tok"),
+		ElementID:   elementID,
+		State:       store.TokenActive,
+		ScopePath:   append([]string(nil), scopePath...),
+		ScopeOwners: append([]string(nil), scopeOwners...),
+		Parent:      parent,
+		LocalVars:   locals,
 	}
 	rt.inst.Tokens[t.ID] = t
 	return t
@@ -270,14 +271,15 @@ func cloneLocals(m map[string]any) map[string]any {
 // when it was the last one.
 func (rt *runtime) consume(tok *store.Token) error {
 	delete(rt.inst.Tokens, tok.ID)
-	return rt.checkScope(tok.ScopePath)
+	return rt.checkScope(tok.ScopePath, tok.ScopeOwners)
 }
 
 // checkScope completes a sub-process scope (or the instance) when no
-// tokens remain in it.
-func (rt *runtime) checkScope(path []string) error {
+// tokens remain in it. Owners disambiguate concurrent multi-instance
+// iterations that share the same scope path.
+func (rt *runtime) checkScope(path, owners []string) error {
 	for _, t := range rt.inst.Tokens {
-		if hasPrefix(t.ScopePath, path) {
+		if hasPrefix(t.ScopePath, path) && hasPrefix(t.ScopeOwners, owners) {
 			return nil // scope still busy
 		}
 	}
@@ -289,7 +291,9 @@ func (rt *runtime) checkScope(path []string) error {
 		return nil
 	}
 	parentPath := path[:len(path)-1]
+	parentOwners := owners[:len(owners)-1]
 	scopeID := path[len(path)-1]
+	ownerID := owners[len(owners)-1]
 	parentC := rt.containerAt(parentPath)
 	if parentC == nil {
 		return nil
@@ -298,11 +302,11 @@ func (rt *runtime) checkScope(path []string) error {
 	if scopeEl != nil && scopeEl.TriggeredByEvent {
 		// Event sub-process finished: nothing owns it; the parent scope
 		// may now be empty as well.
-		return rt.checkScope(parentPath)
+		return rt.checkScope(parentPath, parentOwners)
 	}
-	// Find the owner token waiting at the sub-process element.
-	for _, t := range rt.inst.Tokens {
-		if t.ElementID == scopeID && t.State == store.TokenWaitChild && samePath(t.ScopePath, parentPath) {
+	// Resume the owner token waiting at the sub-process element.
+	if ownerID != "" {
+		if t := rt.inst.Tokens[ownerID]; t != nil && t.ElementID == scopeID && t.State == store.TokenWaitChild {
 			rt.emit(store.HistElementCompleted, scopeID, nil)
 			if scopeEl != nil {
 				rt.applyOutputs(scopeEl, t)
@@ -312,7 +316,7 @@ func (rt *runtime) checkScope(path []string) error {
 			return nil
 		}
 	}
-	return rt.checkScope(parentPath)
+	return rt.checkScope(parentPath, parentOwners)
 }
 
 func hasPrefix(path, prefix []string) bool {
@@ -478,14 +482,14 @@ func (rt *runtime) endEvent(tok *store.Token, el *bpmn.Element) error {
 			return nil
 		}
 		// Terminate only the enclosing sub-process scope.
-		path := tok.ScopePath
+		path, owners := tok.ScopePath, tok.ScopeOwners
 		for id, t := range rt.inst.Tokens {
-			if hasPrefix(t.ScopePath, path) {
+			if hasPrefix(t.ScopePath, path) && hasPrefix(t.ScopeOwners, owners) {
 				rt.cancelWaits(t)
 				delete(rt.inst.Tokens, id)
 			}
 		}
-		return rt.checkScope(path)
+		return rt.checkScope(path, owners)
 
 	case bpmn.KindError:
 		code := el.Event.ErrorCode
@@ -606,7 +610,7 @@ func (rt *runtime) parallelGateway(tok *store.Token, el *bpmn.Element) error {
 func (rt *runtime) parallelJoinReady(tok *store.Token, el *bpmn.Element) bool {
 	arrived := map[string]bool{}
 	for _, t := range rt.inst.Tokens {
-		if t.ElementID == el.ID && t.State == store.TokenJoining && samePath(t.ScopePath, tok.ScopePath) {
+		if t.ElementID == el.ID && t.State == store.TokenJoining && sameScope(t, tok) {
 			arrived[t.ArrivedFlow] = true
 		}
 	}
@@ -622,7 +626,7 @@ func (rt *runtime) parallelJoinReady(tok *store.Token, el *bpmn.Element) bool {
 func (rt *runtime) mergeJoiningTokens(tok *store.Token, el *bpmn.Element) {
 	consumed := map[string]bool{tok.ArrivedFlow: true}
 	for id, t := range rt.inst.Tokens {
-		if t.ID == tok.ID || t.ElementID != el.ID || t.State != store.TokenJoining || !samePath(t.ScopePath, tok.ScopePath) {
+		if t.ID == tok.ID || t.ElementID != el.ID || t.State != store.TokenJoining || !sameScope(t, tok) {
 			continue
 		}
 		if consumed[t.ArrivedFlow] {
@@ -658,7 +662,7 @@ func (rt *runtime) inclusiveGateway(tok *store.Token, el *bpmn.Element) error {
 		}
 		// Merge every token currently joining here.
 		for id, t := range rt.inst.Tokens {
-			if t.ID != tok.ID && t.ElementID == el.ID && t.State == store.TokenJoining && samePath(t.ScopePath, tok.ScopePath) {
+			if t.ID != tok.ID && t.ElementID == el.ID && t.State == store.TokenJoining && sameScope(t, tok) {
 				delete(rt.inst.Tokens, id)
 			}
 		}
@@ -710,10 +714,10 @@ func (rt *runtime) inclusiveJoinReady(tok *store.Token, el *bpmn.Element) bool {
 		if t.ID == tok.ID {
 			continue
 		}
-		if t.ElementID == el.ID && t.State == store.TokenJoining && samePath(t.ScopePath, tok.ScopePath) {
+		if t.ElementID == el.ID && t.State == store.TokenJoining && sameScope(t, tok) {
 			continue // already here
 		}
-		pos, ok := rt.positionInScope(t, tok.ScopePath)
+		pos, ok := rt.positionInScope(t, tok)
 		if !ok {
 			continue // token in an unrelated scope
 		}
@@ -724,17 +728,27 @@ func (rt *runtime) inclusiveJoinReady(tok *store.Token, el *bpmn.Element) bool {
 	return true
 }
 
-// positionInScope projects a token onto an element of the given scope:
-// tokens inside nested sub-processes count as sitting on the sub-process
-// element.
-func (rt *runtime) positionInScope(t *store.Token, scopePath []string) (string, bool) {
-	if samePath(t.ScopePath, scopePath) {
+// positionInScope projects a token onto an element of the reference
+// token's scope: tokens inside nested sub-processes count as sitting on
+// the sub-process element. Tokens from other multi-instance iterations
+// (different scope owners) are unrelated.
+func (rt *runtime) positionInScope(t, ref *store.Token) (string, bool) {
+	if !hasPrefix(t.ScopeOwners, ref.ScopeOwners) {
+		return "", false
+	}
+	if samePath(t.ScopePath, ref.ScopePath) {
 		return t.ElementID, true
 	}
-	if hasPrefix(t.ScopePath, scopePath) && len(t.ScopePath) > len(scopePath) {
-		return t.ScopePath[len(scopePath)], true
+	if hasPrefix(t.ScopePath, ref.ScopePath) && len(t.ScopePath) > len(ref.ScopePath) {
+		return t.ScopePath[len(ref.ScopePath)], true
 	}
 	return "", false
+}
+
+// sameScope reports whether two tokens run in the same scope instance
+// (same path and same owner chain).
+func sameScope(a, b *store.Token) bool {
+	return samePath(a.ScopePath, b.ScopePath) && samePath(a.ScopeOwners, b.ScopeOwners)
 }
 
 // canReach walks sequence flows from fromID looking for toID.
@@ -929,8 +943,10 @@ func (rt *runtime) throwError(tok *store.Token, code, message string) {
 // with an incident — and propagate to a call-activity parent.
 func (rt *runtime) propagateError(tok *store.Token, code, message string) {
 	path := append([]string(nil), tok.ScopePath...)
+	owners := append([]string(nil), tok.ScopeOwners...)
 	for depth := len(path); depth >= 0; depth-- {
 		scopePath := path[:depth]
+		scopeOwners := owners[:depth]
 		c := rt.containerAt(scopePath)
 		if c == nil {
 			continue
@@ -943,10 +959,10 @@ func (rt *runtime) propagateError(tok *store.Token, code, message string) {
 			}
 			for _, se := range es.Sub.StartEvents() {
 				if se.Event != nil && se.Event.Kind == bpmn.KindError && (se.Event.ErrorCode == "" || se.Event.ErrorCode == code) {
-					rt.killScopeTokens(scopePath, id)
+					rt.killScopeTokens(scopePath, scopeOwners, id)
 					rt.inst.Variables["errorCode"] = code
 					rt.inst.Variables["errorMessage"] = message
-					rt.spawnToken(se.ID, append(scopePath, id), "", nil)
+					rt.spawnToken(se.ID, append(scopePath, id), append(scopeOwners, ""), "", nil)
 					return
 				}
 			}
@@ -956,20 +972,22 @@ func (rt *runtime) propagateError(tok *store.Token, code, message string) {
 			parentPath := path[:depth-1]
 			pc := rt.containerAt(parentPath)
 			scopeID := path[depth-1]
+			ownerID := owners[depth-1]
 			if pc != nil {
 				for _, b := range pc.BoundaryEvents(scopeID) {
 					if b.Event.Kind == bpmn.KindError && (b.Event.ErrorCode == "" || b.Event.ErrorCode == code) {
 						// Cancel the whole scope, then continue from the
 						// boundary event.
-						rt.killScopeTokens(scopePath, "")
-						owner := rt.findScopeOwner(parentPath, scopeID)
-						if owner != nil {
+						rt.killScopeTokens(scopePath, scopeOwners, "")
+						rt.inst.Variables["errorCode"] = code
+						rt.inst.Variables["errorMessage"] = message
+						if owner := rt.inst.Tokens[ownerID]; owner != nil && owner.ElementID == scopeID {
 							rt.cancelBoundaries(owner)
 							owner.ElementID = b.ID
 							owner.State = store.TokenActive
 							owner.WaitRef = ""
 						} else {
-							rt.spawnToken(b.ID, parentPath, "", nil)
+							rt.spawnToken(b.ID, parentPath, owners[:depth-1], "", nil)
 						}
 						return
 					}
@@ -993,11 +1011,12 @@ func (rt *runtime) propagateError(tok *store.Token, code, message string) {
 	rt.terminate("unhandled error " + code)
 }
 
-// killScopeTokens removes every token inside scopePath (except tokens in
-// the excluded child scope, e.g. the event sub-process being started).
-func (rt *runtime) killScopeTokens(scopePath []string, excludeChild string) {
+// killScopeTokens removes every token inside the scope instance
+// identified by scopePath+scopeOwners (except tokens in the excluded
+// child scope, e.g. the event sub-process being started).
+func (rt *runtime) killScopeTokens(scopePath, scopeOwners []string, excludeChild string) {
 	for id, t := range rt.inst.Tokens {
-		if !hasPrefix(t.ScopePath, scopePath) {
+		if !hasPrefix(t.ScopePath, scopePath) || !hasPrefix(t.ScopeOwners, scopeOwners) {
 			continue
 		}
 		if excludeChild != "" && len(t.ScopePath) > len(scopePath) && t.ScopePath[len(scopePath)] == excludeChild {
@@ -1008,16 +1027,6 @@ func (rt *runtime) killScopeTokens(scopePath []string, excludeChild string) {
 		rt.cancelWaits(t)
 		delete(rt.inst.Tokens, id)
 	}
-}
-
-// findScopeOwner locates the token waiting at a sub-process element.
-func (rt *runtime) findScopeOwner(parentPath []string, scopeID string) *store.Token {
-	for _, t := range rt.inst.Tokens {
-		if t.ElementID == scopeID && samePath(t.ScopePath, parentPath) && t.State == store.TokenWaitChild {
-			return t
-		}
-	}
-	return nil
 }
 
 // cancelWaits cancels whatever the token is waiting for.

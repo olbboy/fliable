@@ -56,6 +56,11 @@ type Token struct {
 	// ScopePath is the chain of sub-process element IDs from the process
 	// root down to the scope containing ElementID.
 	ScopePath []string `json:"scopePath,omitempty"`
+	// ScopeOwners parallels ScopePath: the ID of the token owning each
+	// scope level ("" for event sub-processes, which have no owner).
+	// It disambiguates concurrent iterations of multi-instance
+	// sub-processes, which share the same ScopePath.
+	ScopeOwners []string `json:"scopeOwners,omitempty"`
 	// ArrivedFlow is the sequence flow the token arrived through (used by
 	// joining gateways).
 	ArrivedFlow string `json:"arrivedFlow,omitempty"`

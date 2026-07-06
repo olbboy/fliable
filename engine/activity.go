@@ -331,9 +331,9 @@ func (rt *runtime) enterSubProcess(tok *store.Token, el *bpmn.Element) error {
 	tok.State = store.TokenWaitChild
 	tok.WaitRef = scopeWaitRef
 	childPath := append(append([]string(nil), tok.ScopePath...), el.ID)
+	childOwners := append(append([]string(nil), tok.ScopeOwners...), tok.ID)
 	rt.registerEventSubprocesses(el.Sub, childPath, tok.ID)
-	child := rt.spawnToken(start.ID, childPath, "", nil)
-	_ = child
+	rt.spawnToken(start.ID, childPath, childOwners, "", nil)
 	return nil
 }
 

@@ -92,8 +92,7 @@ func (rt *runtime) spawnMIChild(parent *store.Token, el *bpmn.Element, state *st
 	if el.MultiInstance.ElementVariable != "" {
 		locals[el.MultiInstance.ElementVariable] = state.Items[index]
 	}
-	child := rt.spawnToken(el.ID, parent.ScopePath, parent.ID, locals)
-	_ = child
+	rt.spawnToken(el.ID, parent.ScopePath, parent.ScopeOwners, parent.ID, locals)
 }
 
 // miChildCompleted collects one finished loop iteration and decides

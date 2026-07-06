@@ -21,7 +21,7 @@ func (rt *runtime) eventTriggered(tokenID, elementID, refID string) (bool, error
 	case bpmn.TypeBoundaryEvent:
 		return rt.boundaryTriggered(tokenID, el, refID)
 	case bpmn.TypeStartEvent:
-		return rt.eventSubprocessTriggered(el, refID)
+		return rt.eventSubprocessTriggered(tokenID, el, refID)
 	}
 
 	tok := rt.inst.Tokens[tokenID]
@@ -80,8 +80,7 @@ func (rt *runtime) boundaryTriggered(tokenID string, bel *bpmn.Element, refID st
 	}
 
 	// Non-interrupting: spawn a parallel token at the boundary event.
-	nt := rt.spawnToken(bel.ID, tok.ScopePath, "", nil)
-	nt.ArrivedFlow = ""
+	rt.spawnToken(bel.ID, tok.ScopePath, tok.ScopeOwners, "", nil)
 	return true, nil
 }
 
@@ -92,7 +91,9 @@ func (rt *runtime) cancelActivity(tok *store.Token) {
 	el := rt.element(tok)
 	rt.cancelWaits(tok)
 	if el != nil && el.Type == bpmn.TypeSubProcess {
-		rt.killScopeTokens(append(append([]string(nil), tok.ScopePath...), el.ID), "")
+		rt.killScopeTokens(
+			append(append([]string(nil), tok.ScopePath...), el.ID),
+			append(append([]string(nil), tok.ScopeOwners...), tok.ID), "")
 	}
 	if el != nil {
 		rt.emit(store.HistElementCompleted, el.ID, map[string]any{"canceled": true})
@@ -109,13 +110,23 @@ func (rt *runtime) moveToBoundary(tok *store.Token, bel *bpmn.Element) {
 }
 
 // eventSubprocessTriggered starts an event sub-process from its typed
-// start event.
-func (rt *runtime) eventSubprocessTriggered(startEl *bpmn.Element, refID string) (bool, error) {
-	// Locate the event sub-process containing this start event and its
-	// scope path.
-	path, esID := rt.findEventSubprocess(startEl.ID)
+// start event. ownerTokenID is the token owning the enclosing scope
+// ("" for the process root), recorded on the subscription/job at
+// registration time.
+func (rt *runtime) eventSubprocessTriggered(ownerTokenID string, startEl *bpmn.Element, refID string) (bool, error) {
+	_, esID := rt.findEventSubprocess(startEl.ID)
 	if esID == "" {
 		return false, fmt.Errorf("engine: start event %q is not inside an event sub-process", startEl.ID)
+	}
+	// Resolve the concrete scope instance from the owner token.
+	var path, owners []string
+	if ownerTokenID != "" {
+		owner := rt.inst.Tokens[ownerTokenID]
+		if owner == nil {
+			return false, nil // scope already gone
+		}
+		path = append(append([]string(nil), owner.ScopePath...), owner.ElementID)
+		owners = append(append([]string(nil), owner.ScopeOwners...), owner.ID)
 	}
 	interrupting := startEl.CancelActivity
 
@@ -123,12 +134,12 @@ func (rt *runtime) eventSubprocessTriggered(startEl *bpmn.Element, refID string)
 	if interrupting {
 		// Kill every token in the enclosing scope except those already in
 		// the event sub-process, then remove the one-shot trigger.
-		rt.killScopeTokens(path, esID)
+		rt.killScopeTokens(path, owners, esID)
 		if refID != "" {
 			_ = rt.e.st.DeleteSubscription(refID)
 		}
 	}
-	rt.spawnToken(startEl.ID, append(append([]string(nil), path...), esID), "", nil)
+	rt.spawnToken(startEl.ID, append(append([]string(nil), path...), esID), append(append([]string(nil), owners...), ""), "", nil)
 	return true, nil
 }
 
