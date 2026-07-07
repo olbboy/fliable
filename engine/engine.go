@@ -78,6 +78,12 @@ type FormValidator interface {
 	Validate(formKey string, vars map[string]any) error
 }
 
+// TraceparentVar is the reserved instance variable carrying the W3C
+// trace context. The REST layer sets it from the incoming traceparent
+// header; workers see it in their variable snapshots; the otel exporter
+// parents process spans under it.
+const TraceparentVar = "__traceparent"
+
 // BPMNError is a business error thrown by handlers and caught by error
 // boundary events or event sub-processes.
 type BPMNError struct {
@@ -602,7 +608,11 @@ func (e *Engine) startInstance(defID, presetID, businessKey string, vars map[str
 	// immediately-due timer and fail to load the instance.
 	err = e.st.PutInstance(inst)
 	if err == nil {
-		rt.emit(store.HistInstanceStarted, start.ID, map[string]any{"businessKey": businessKey, "definitionKey": pd.def.Key, "version": float64(pd.def.Version)})
+		startDetail := map[string]any{"businessKey": businessKey, "definitionKey": pd.def.Key, "version": float64(pd.def.Version)}
+		if tp, ok := normVars[TraceparentVar].(string); ok && tp != "" {
+			startDetail["traceparent"] = tp
+		}
+		rt.emit(store.HistInstanceStarted, start.ID, startDetail)
 		rt.registerEventSubprocesses(&pd.proc.Container, nil, "")
 		err = rt.drain()
 	}

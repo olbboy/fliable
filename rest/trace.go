@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"net/http"
 	"regexp"
+
+	"github.com/olbboy/fliable/engine"
 )
 
 // W3C Trace Context (https://www.w3.org/TR/trace-context/): every request
@@ -72,4 +74,4 @@ func (s *statusWriter) Flush() {
 // traceparentVar is the reserved instance variable that carries the trace
 // context to workers (external tasks and agent jobs snapshot instance
 // variables, so it rides along automatically).
-const traceparentVar = "__traceparent"
+const traceparentVar = engine.TraceparentVar

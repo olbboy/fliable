@@ -23,11 +23,14 @@ import (
 	"github.com/olbboy/fliable/bpmn"
 	"github.com/olbboy/fliable/dmn"
 	"github.com/olbboy/fliable/engine"
+	"github.com/olbboy/fliable/form"
+	"github.com/olbboy/fliable/otel"
 	"github.com/olbboy/fliable/rest"
 	"github.com/olbboy/fliable/store"
+	"github.com/olbboy/fliable/vault"
 )
 
-var version = "1.0.0"
+var version = "1.2.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -68,6 +71,10 @@ Serve flags:
   --api-key string  require X-Api-Key header on API calls
   --deploy string   directory of .bpmn/.dmn files to deploy at startup
   --poll duration   job scheduler poll interval (default 100ms)
+  --otel string     OTLP/HTTP endpoint for trace export (e.g. http://collector:4318)
+
+Environment:
+  FLIABLE_MASTER_KEY   enables the encrypted secrets vault (/v1/secrets)
 `)
 }
 
@@ -79,6 +86,7 @@ func serve(args []string) error {
 	apiKey := fs.String("api-key", "", "require X-Api-Key header")
 	deployDir := fs.String("deploy", "", "deploy all .bpmn/.dmn files from this directory at startup")
 	poll := fs.Duration("poll", 100*time.Millisecond, "job poll interval")
+	otelEndpoint := fs.String("otel", "", "OTLP/HTTP endpoint for trace export")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -101,11 +109,33 @@ func serve(args []string) error {
 	defer st.Close()
 
 	decisions := dmn.NewRegistry()
-	eng := engine.New(st,
+	forms := form.NewRegistry(st)
+	engOpts := []engine.Option{
 		engine.WithLogger(log),
 		engine.WithDecisionEvaluator(decisions),
 		engine.WithJobPollInterval(*poll),
-	)
+		engine.WithFormValidator(forms),
+	}
+	restOpts := []rest.Option{rest.WithLogger(log), rest.WithDecisions(decisions), rest.WithForms(forms)}
+
+	if masterKey := os.Getenv("FLIABLE_MASTER_KEY"); masterKey != "" {
+		v, err := vault.New(st, []byte(masterKey))
+		if err != nil {
+			return err
+		}
+		engOpts = append(engOpts, engine.WithSecrets(v))
+		restOpts = append(restOpts, rest.WithVault(v))
+		log.Info("secrets vault enabled")
+	}
+
+	eng := engine.New(st, engOpts...)
+
+	if *otelEndpoint != "" {
+		exp := otel.New(otel.Config{Endpoint: *otelEndpoint, Logger: log})
+		exp.Attach(eng)
+		defer exp.Close()
+		log.Info("otel trace export enabled", "endpoint", *otelEndpoint)
+	}
 
 	if *deployDir != "" {
 		if err := deployAll(eng, decisions, *deployDir, log); err != nil {
@@ -116,8 +146,6 @@ func serve(args []string) error {
 	eng.Start()
 	defer eng.Stop()
 
-	var restOpts []rest.Option
-	restOpts = append(restOpts, rest.WithLogger(log), rest.WithDecisions(decisions))
 	if *apiKey != "" {
 		restOpts = append(restOpts, rest.WithAPIKey(*apiKey))
 	}
