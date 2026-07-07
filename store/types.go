@@ -335,5 +335,6 @@ const (
 	HistIncidentResolved   = "incident.resolved"
 	HistAgentInvoked       = "agent.invoked"
 	HistAgentCompleted     = "agent.completed"
+	HistAgentRejected      = "agent.rejected" // guard: budget block or review rejection
 	HistInstanceMigrated   = "instance.migrated"
 )

@@ -174,6 +174,7 @@ type Engine struct {
 	agents       map[string]AgentInvoker
 	amu          sync.RWMutex
 	defaultAgent AgentInvoker
+	agentGuard   *AgentGuard
 	secrets      SecretSource
 	forms        FormValidator
 

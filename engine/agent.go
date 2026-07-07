@@ -106,6 +106,11 @@ func (e *Engine) agentInvoker(name string) AgentInvoker {
 // is recorded in history for deterministic replay and governance.
 func (rt *runtime) agentTask(tok *store.Token, el *bpmn.Element) error {
 	spec := el.Agent
+	// Cost circuit-breaker: an instance whose agent token budget is spent
+	// parks on an incident instead of invoking again.
+	if !rt.checkAgentBudget(tok, el) {
+		return nil
+	}
 	env := rt.env(tok)
 	prompt := interpolate(spec.Prompt, env)
 	system := interpolate(spec.System, env)
@@ -161,7 +166,7 @@ func (rt *runtime) agentTask(tok *store.Token, el *bpmn.Element) error {
 	for i, t := range spec.Tools {
 		agentTools[i] = AgentTool{Name: t.Name, Description: t.Description, Schema: t.Schema, MCPServer: t.MCPServer}
 	}
-	resp, err := inv.InvokeAgent(AgentRequest{
+	resp, err := rt.e.invokeWithTimeout(inv, AgentRequest{
 		InstanceID: rt.inst.ID, ElementID: el.ID, Agent: spec.Agent,
 		Prompt: prompt, System: system, Tools: agentTools,
 		Model: spec.Model, Effort: spec.Effort, MaxTokens: spec.MaxTokens,
@@ -172,6 +177,10 @@ func (rt *runtime) agentTask(tok *store.Token, el *bpmn.Element) error {
 		return nil
 	}
 	rt.recordAgentResult(tok, el, resp.Output, resp.Text, resp.ToolCalls, resp.Usage)
+	rt.chargeAgentUsage(resp.Usage)
+	if !rt.reviewAgentResult(tok, el, resp.Output, resp.Text, resp.ToolCalls, resp.Usage) {
+		return nil
+	}
 	return rt.finishAgent(tok, el, spec, resp.Output, resp.Text)
 }
 
@@ -281,6 +290,12 @@ func (e *Engine) completeAgentJobResult(job *store.AgentJob, output map[string]a
 			return false, err
 		}
 		rt.recordAgentResult(tok, el, output, text, calls, usage)
+		rt.chargeAgentUsage(usage)
+		// A guard rejection fails the element through the normal retry
+		// cycle: the activity re-executes and creates a fresh agent job.
+		if !rt.reviewAgentResult(tok, el, output, text, calls, usage) {
+			return true, nil
+		}
 		return true, rt.finishAgent(tok, el, el.Agent, output, text)
 	})
 }

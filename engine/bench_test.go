@@ -66,6 +66,54 @@ func BenchmarkProcessExecutionParallel(b *testing.B) {
 	})
 }
 
+const benchAgentXML = `<?xml version="1.0"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:fliable="https://fliable.dev/schema/1.0" targetNamespace="bench">
+  <process id="benchAgent" isExecutable="true">
+    <startEvent id="s"/>
+    <sequenceFlow id="f1" sourceRef="s" targetRef="agent"/>
+    <serviceTask id="agent" fliable:agent="fast">
+      <extensionElements>
+        <fliable:agent>
+          <fliable:prompt>Classify: ${ticket}</fliable:prompt>
+          <fliable:tool name="lookup" mcpServer="crm"/>
+        </fliable:agent>
+      </extensionElements>
+    </serviceTask>
+    <sequenceFlow id="f2" sourceRef="agent" targetRef="e"/>
+    <endEvent id="e"/>
+  </process>
+</definitions>`
+
+// BenchmarkAgentTask measures the engine-side overhead of one governed
+// agent invocation (prompt interpolation, governance events, usage
+// charging, guard review) with a zero-latency invoker — i.e. everything
+// except the model call itself.
+func BenchmarkAgentTask(b *testing.B) {
+	e := New(store.NewMemory())
+	e.agentGuard = &AgentGuard{
+		MaxTokensPerInstance: 1 << 30,
+		Review:               func(AgentReview) error { return nil },
+	}
+	e.RegisterAgent("fast", AgentInvokerFunc(func(req AgentRequest) (AgentResponse, error) {
+		return AgentResponse{
+			Output: map[string]any{"category": "billing"},
+			Usage:  AgentUsage{InputTokens: 100, OutputTokens: 20},
+		}, nil
+	}))
+	if _, err := e.Deploy([]byte(benchAgentXML), ""); err != nil {
+		b.Fatal(err)
+	}
+	vars := map[string]any{"ticket": "double charge"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := e.StartInstance("benchAgent", "", vars); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // TestConcurrentExecution hammers the engine from many goroutines to
 // surface races (run with -race).
 func TestConcurrentExecution(t *testing.T) {
