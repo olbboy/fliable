@@ -79,11 +79,11 @@ func TestUnknownFormKeyIsPermissive(t *testing.T) {
 func TestDeployRejectsBadDefinitions(t *testing.T) {
 	r := NewRegistry(store.NewMemory())
 	bad := []string{
-		`{"fields": []}`, // no key
-		`{"key": "a", "fields": [{"id": "x"}]}`,                             // no type
-		`{"key": "a", "fields": [{"id": "x", "type": "blob"}]}`,             // bad type
-		`{"key": "a", "fields": [{"id": "x", "type": "enum"}]}`,             // enum w/o options
-		`{"key": "a", "fields": [{"id":"x","type":"string","pattern":"["}]}`, // bad regexp
+		`{"fields": []}`,                                                                  // no key
+		`{"key": "a", "fields": [{"id": "x"}]}`,                                           // no type
+		`{"key": "a", "fields": [{"id": "x", "type": "blob"}]}`,                           // bad type
+		`{"key": "a", "fields": [{"id": "x", "type": "enum"}]}`,                           // enum w/o options
+		`{"key": "a", "fields": [{"id":"x","type":"string","pattern":"["}]}`,              // bad regexp
 		`{"key": "a", "fields": [{"id":"x","type":"string"},{"id":"x","type":"string"}]}`, // dup
 	}
 	for _, doc := range bad {
