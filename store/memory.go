@@ -18,6 +18,7 @@ type Memory struct {
 	tasks       map[string]*Task
 	jobs        map[string]*Job
 	externals   map[string]*ExternalTask
+	agentJobs   map[string]*AgentJob
 	subs        map[string]*Subscription
 	incidents   map[string]*Incident
 	history     map[string][]*HistoryEvent
@@ -32,6 +33,7 @@ func NewMemory() *Memory {
 		tasks:       map[string]*Task{},
 		jobs:        map[string]*Job{},
 		externals:   map[string]*ExternalTask{},
+		agentJobs:   map[string]*AgentJob{},
 		subs:        map[string]*Subscription{},
 		incidents:   map[string]*Incident{},
 		history:     map[string][]*HistoryEvent{},
@@ -202,6 +204,11 @@ func (m *Memory) PurgeInstance(id string) error {
 	for eid, e := range m.externals {
 		if e.InstanceID == id {
 			delete(m.externals, eid)
+		}
+	}
+	for aid, a := range m.agentJobs {
+		if a.InstanceID == id {
+			delete(m.agentJobs, aid)
 		}
 	}
 	for sid, s := range m.subs {
@@ -429,6 +436,68 @@ func (m *Memory) ListExternalTasks(instanceID string) ([]*ExternalTask, error) {
 	return out, nil
 }
 
+// ---- agent jobs --------------------------------------------------------------
+
+// PutAgentJob implements Store.
+func (m *Memory) PutAgentJob(j *AgentJob) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.agentJobs[j.ID] = cloneAgentJob(j)
+	return nil
+}
+
+// GetAgentJob implements Store.
+func (m *Memory) GetAgentJob(id string) (*AgentJob, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	j, ok := m.agentJobs[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return cloneAgentJob(j), nil
+}
+
+// FetchAndLockAgentJobs implements Store.
+func (m *Memory) FetchAndLockAgentJobs(topic, workerID string, until, now time.Time, limit int) ([]*AgentJob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var avail []*AgentJob
+	for _, j := range m.agentJobs {
+		if j.Topic != topic || j.State != AgentPending {
+			continue
+		}
+		if j.LockedBy != "" && j.LockUntil.After(now) {
+			continue
+		}
+		avail = append(avail, j)
+	}
+	sort.Slice(avail, func(i, j int) bool { return avail[i].ID < avail[j].ID })
+	if limit > 0 && len(avail) > limit {
+		avail = avail[:limit]
+	}
+	out := make([]*AgentJob, 0, len(avail))
+	for _, j := range avail {
+		j.LockedBy = workerID
+		j.LockUntil = until
+		out = append(out, cloneAgentJob(j))
+	}
+	return out, nil
+}
+
+// ListAgentJobs implements Store.
+func (m *Memory) ListAgentJobs(instanceID string) ([]*AgentJob, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*AgentJob
+	for _, j := range m.agentJobs {
+		if instanceID == "" || j.InstanceID == instanceID {
+			out = append(out, cloneAgentJob(j))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 // ---- subscriptions -----------------------------------------------------------
 
 // PutSubscription implements Store.
@@ -641,6 +710,15 @@ func cloneExternal(t *ExternalTask) *ExternalTask {
 	cp := *t
 	if t.Variables != nil {
 		cp.Variables = cloneMap(t.Variables)
+	}
+	return &cp
+}
+
+func cloneAgentJob(j *AgentJob) *AgentJob {
+	cp := *j
+	cp.Tools = append([]AgentToolSpec(nil), j.Tools...)
+	if j.Variables != nil {
+		cp.Variables = cloneMap(j.Variables)
 	}
 	return &cp
 }

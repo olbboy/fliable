@@ -138,6 +138,57 @@ type EventDefinition struct {
 	ErrorCode string
 }
 
+// AgentSpec configures an AI agent task: a service task that invokes an
+// LLM/agent (in-process or via an external AI worker) with structured
+// output, tool access and optional human approval. The engine stays
+// provider-agnostic — it never calls a model itself; an AgentInvoker or
+// an external worker does, and every prompt/tool-call/output is recorded
+// in history for deterministic replay and governance.
+type AgentSpec struct {
+	// Agent names the registered in-process invoker, or the logical agent
+	// an external worker fetches by.
+	Agent string
+	// Topic, when set, routes the agent task to external AI workers
+	// (poll/complete over REST) instead of an in-process invoker.
+	Topic string
+	// Prompt and System are templates: ${expr} / {{var}} interpolate
+	// instance variables.
+	Prompt string
+	System string
+	// OutputVar receives the agent's result (structured output merges as
+	// variables; a scalar lands in OutputVar).
+	OutputVar string
+	// Tools the agent may call (MCP-native descriptors; the invoker/worker
+	// executes them).
+	Tools []AgentTool
+	// Model is an optional hint (e.g. "claude-opus-4-8"); the invoker
+	// decides the provider.
+	Model string
+	// MaxTokens / effort hints passed through to the invoker.
+	MaxTokens int
+	Effort    string
+	// HumanApproval routes the agent's proposed output to a user task for
+	// sign-off before it is applied (human-in-the-loop gate).
+	HumanApproval bool
+	// ApprovalGroups are candidate groups for the approval task.
+	ApprovalGroups []string
+	// Retries before the failure raises an incident.
+	Retries int
+}
+
+// AgentTool is one tool an agent may call, described in an MCP-compatible
+// shape (name + description + JSON-schema input). The invoker or external
+// worker binds it to an actual implementation / MCP server.
+type AgentTool struct {
+	Name        string
+	Description string
+	// Schema is the raw JSON schema for the tool input (opaque to the
+	// engine).
+	Schema string
+	// MCPServer optionally names the MCP server that hosts this tool.
+	MCPServer string
+}
+
 // MultiInstance configures multi-instance (loop) execution of an activity.
 type MultiInstance struct {
 	Sequential          bool
@@ -211,6 +262,10 @@ type Element struct {
 
 	// Multi-instance loop characteristics, nil if not multi-instance.
 	MultiInstance *MultiInstance
+
+	// Agent holds AI agent configuration when this activity is an agent
+	// task, nil otherwise.
+	Agent *AgentSpec
 
 	// Input/output variable mappings.
 	Inputs  []IOMapping

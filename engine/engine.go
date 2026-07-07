@@ -98,6 +98,12 @@ func WithDecisionEvaluator(d DecisionEvaluator) Option {
 	return func(e *Engine) { e.decisions = d }
 }
 
+// WithDefaultAgent sets the invoker used by agent tasks whose named agent
+// has no specific registration.
+func WithDefaultAgent(inv AgentInvoker) Option {
+	return func(e *Engine) { e.defaultAgent = inv }
+}
+
 // WithRetryBackoff sets the base backoff for service task retries
 // (attempt n waits base * 2^n). Default 5s.
 func WithRetryBackoff(d time.Duration) Option {
@@ -121,6 +127,10 @@ type Engine struct {
 	handlers  map[string]ServiceHandler
 	hmu       sync.RWMutex
 	decisions DecisionEvaluator
+
+	agents       map[string]AgentInvoker
+	amu          sync.RWMutex
+	defaultAgent AgentInvoker
 
 	listeners []func(*store.HistoryEvent)
 	lmu       sync.RWMutex
@@ -734,6 +744,25 @@ func (e *Engine) CompleteTask(taskID string, vars map[string]any, user string) e
 		e.metrics.TasksCompleted.Add(1)
 		rt.emit(store.HistTaskCompleted, t.ElementID, map[string]any{"taskId": t.ID, "by": user})
 		el := rt.element(tok)
+		// Human-in-the-loop approval of an agent proposal: apply the stashed
+		// output unless the reviewer explicitly rejected it.
+		if el != nil && el.Agent != nil && tok.LocalVars != nil {
+			if stash, ok := tok.LocalVars[agentProposalVar].(map[string]any); ok {
+				delete(tok.LocalVars, agentProposalVar)
+				approved := true
+				if v, set := vars["approved"]; set {
+					approved = expr.Truthy(v)
+				}
+				rt.emit(store.HistAgentCompleted, el.ID, map[string]any{"approvedBy": user, "approved": approved})
+				if approved {
+					out, _ := stash["output"].(map[string]any)
+					text, _ := stash["text"].(string)
+					rt.applyAgentOutput(el, el.Agent, out, text)
+				}
+				rt.finishSyncActivity(tok, el)
+				return true, nil
+			}
+		}
 		if el != nil {
 			rt.applyOutputs(el, tok)
 			rt.clearInputLocals(el, tok)
@@ -954,6 +983,74 @@ func (e *Engine) FailExternalTask(id, workerID, message, errorCode string) error
 			return false, err
 		}
 		rt.raiseIncident(tok, "", fmt.Sprintf("external task on topic %q failed: %s", t.Topic, message))
+		return true, nil
+	})
+}
+
+// ---- AI agent workers ------------------------------------------------------------------------
+
+// FetchAgentJobs locks up to limit pending agent jobs on topic for an AI
+// worker/assistant to run. The returned jobs carry the full prompt, tool
+// set and variable snapshot.
+func (e *Engine) FetchAgentJobs(topic, workerID string, lockFor time.Duration, limit int) ([]*store.AgentJob, error) {
+	now := e.now()
+	return e.st.FetchAndLockAgentJobs(topic, workerID, now.Add(lockFor), now, limit)
+}
+
+// CompleteAgentJob applies an external AI worker's structured result and
+// resumes the flow (through the human-approval gate if configured).
+func (e *Engine) CompleteAgentJob(id, workerID string, output map[string]any, text string, calls []AgentToolCall, usage AgentUsage) error {
+	job, err := e.st.GetAgentJob(id)
+	if err != nil {
+		return err
+	}
+	if job.State != store.AgentPending {
+		return fmt.Errorf("engine: agent job %s is %s", id, job.State)
+	}
+	if job.LockedBy != workerID {
+		return fmt.Errorf("engine: agent job %s locked by %q, not %q", id, job.LockedBy, workerID)
+	}
+	return e.completeAgentJobResult(job, output, text, calls, usage)
+}
+
+// FailAgentJob reports a failed agent run: retries left redeliver, an
+// errorCode throws a catchable BPMN error, exhausted retries raise an
+// incident.
+func (e *Engine) FailAgentJob(id, workerID, message, errorCode string) error {
+	job, err := e.st.GetAgentJob(id)
+	if err != nil {
+		return err
+	}
+	if job.State != store.AgentPending {
+		return fmt.Errorf("engine: agent job %s is %s", id, job.State)
+	}
+	if job.LockedBy != workerID {
+		return fmt.Errorf("engine: agent job %s locked by %q, not %q", id, job.LockedBy, workerID)
+	}
+	return e.resume(job.InstanceID, func(rt *runtime) (bool, error) {
+		tok := rt.inst.Tokens[job.TokenID]
+		if tok == nil || tok.State != store.TokenWaitAgent || tok.WaitRef != job.ID {
+			return false, fmt.Errorf("engine: agent job %s is no longer active", id)
+		}
+		if errorCode != "" {
+			job.State = store.AgentFailed
+			if err := e.st.PutAgentJob(job); err != nil {
+				return false, err
+			}
+			rt.throwError(tok, errorCode, message)
+			return true, nil
+		}
+		job.Retries--
+		if job.Retries > 0 {
+			job.LockedBy = ""
+			job.LockUntil = time.Time{}
+			return true, e.st.PutAgentJob(job)
+		}
+		job.State = store.AgentFailed
+		if err := e.st.PutAgentJob(job); err != nil {
+			return false, err
+		}
+		rt.raiseIncident(tok, "", fmt.Sprintf("agent job on topic %q failed: %s", job.Topic, message))
 		return true, nil
 	})
 }

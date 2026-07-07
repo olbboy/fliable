@@ -42,6 +42,7 @@ const (
 	TokenWaitMessage  TokenState = "waitMessage"
 	TokenWaitSignal   TokenState = "waitSignal"
 	TokenWaitExternal TokenState = "waitExternal"
+	TokenWaitAgent    TokenState = "waitAgent"
 	TokenWaitChild    TokenState = "waitChildInstance"
 	TokenWaitMulti    TokenState = "waitMultiInstance"
 	TokenJoining      TokenState = "joining"
@@ -206,6 +207,51 @@ type ExternalTask struct {
 	CreatedAt  time.Time         `json:"createdAt"`
 }
 
+// AgentJobState is the lifecycle of an AI agent job.
+type AgentJobState string
+
+// Agent job states.
+const (
+	AgentPending  AgentJobState = "pending"
+	AgentApproval AgentJobState = "awaitingApproval"
+	AgentDone     AgentJobState = "done"
+	AgentFailed   AgentJobState = "failed"
+)
+
+// AgentToolSpec is an MCP-native tool descriptor handed to an AI worker.
+type AgentToolSpec struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Schema      string `json:"schema,omitempty"`
+	MCPServer   string `json:"mcpServer,omitempty"`
+}
+
+// AgentJob is a unit of AI agent work fetched and completed by external AI
+// workers/assistants over the API (the agent analogue of ExternalTask).
+// It carries the full prompt, tool set and resolved output so every agent
+// decision is auditable and replayable from history.
+type AgentJob struct {
+	ID         string          `json:"id"`
+	TenantID   string          `json:"tenantId,omitempty"`
+	InstanceID string          `json:"instanceId"`
+	TokenID    string          `json:"tokenId"`
+	ElementID  string          `json:"elementId"`
+	Agent      string          `json:"agent,omitempty"`
+	Topic      string          `json:"topic"`
+	Prompt     string          `json:"prompt"`
+	System     string          `json:"system,omitempty"`
+	Tools      []AgentToolSpec `json:"tools,omitempty"`
+	Model      string          `json:"model,omitempty"`
+	Effort     string          `json:"effort,omitempty"`
+	MaxTokens  int             `json:"maxTokens,omitempty"`
+	Variables  map[string]any  `json:"variables,omitempty"`
+	State      AgentJobState   `json:"state"`
+	LockedBy   string          `json:"lockedBy,omitempty"`
+	LockUntil  time.Time       `json:"lockUntil,omitzero"`
+	Retries    int             `json:"retries"`
+	CreatedAt  time.Time       `json:"createdAt"`
+}
+
 // SubscriptionKind classifies event subscriptions.
 type SubscriptionKind string
 
@@ -275,4 +321,6 @@ const (
 	HistErrorThrown        = "error.thrown"
 	HistIncidentCreated    = "incident.created"
 	HistIncidentResolved   = "incident.resolved"
+	HistAgentInvoked       = "agent.invoked"
+	HistAgentCompleted     = "agent.completed"
 )

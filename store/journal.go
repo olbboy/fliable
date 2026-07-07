@@ -50,6 +50,7 @@ type snapshotFile struct {
 	Tasks       []*Task                    `json:"tasks"`
 	Jobs        []*Job                     `json:"jobs"`
 	Externals   []*ExternalTask            `json:"externals"`
+	AgentJobs   []*AgentJob                `json:"agentJobs"`
 	Subs        []*Subscription            `json:"subs"`
 	Incidents   []*Incident                `json:"incidents"`
 	History     map[string][]*HistoryEvent `json:"history"`
@@ -100,6 +101,9 @@ func (j *Journal) load() error {
 		}
 		for _, e := range snap.Externals {
 			j.mem.externals[e.ID] = e
+		}
+		for _, a := range snap.AgentJobs {
+			j.mem.agentJobs[a.ID] = a
 		}
 		for _, s := range snap.Subs {
 			j.mem.subs[s.ID] = s
@@ -193,6 +197,12 @@ func (j *Journal) apply(e journalEntry) error {
 			return err
 		}
 		return j.mem.PutExternalTask(&t)
+	case "agent":
+		var a AgentJob
+		if err := json.Unmarshal(e.D, &a); err != nil {
+			return err
+		}
+		return j.mem.PutAgentJob(&a)
 	case "sub":
 		var s Subscription
 		if err := json.Unmarshal(e.D, &s); err != nil {
@@ -275,6 +285,9 @@ func (j *Journal) compactLocked() error {
 	}
 	for _, e := range j.mem.externals {
 		snap.Externals = append(snap.Externals, e)
+	}
+	for _, a := range j.mem.agentJobs {
+		snap.AgentJobs = append(snap.AgentJobs, a)
 	}
 	for _, s := range j.mem.subs {
 		snap.Subs = append(snap.Subs, s)
@@ -452,6 +465,36 @@ func (j *Journal) FetchAndLockExternalTasks(topic, workerID string, until, now t
 // ListExternalTasks implements Store.
 func (j *Journal) ListExternalTasks(instanceID string) ([]*ExternalTask, error) {
 	return j.mem.ListExternalTasks(instanceID)
+}
+
+// PutAgentJob implements Store.
+func (j *Journal) PutAgentJob(a *AgentJob) error {
+	if err := j.mem.PutAgentJob(a); err != nil {
+		return err
+	}
+	return j.append("agent", "", a)
+}
+
+// GetAgentJob implements Store.
+func (j *Journal) GetAgentJob(id string) (*AgentJob, error) { return j.mem.GetAgentJob(id) }
+
+// FetchAndLockAgentJobs implements Store.
+func (j *Journal) FetchAndLockAgentJobs(topic, workerID string, until, now time.Time, limit int) ([]*AgentJob, error) {
+	jobs, err := j.mem.FetchAndLockAgentJobs(topic, workerID, until, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range jobs {
+		if err := j.append("agent", "", a); err != nil {
+			return nil, err
+		}
+	}
+	return jobs, nil
+}
+
+// ListAgentJobs implements Store.
+func (j *Journal) ListAgentJobs(instanceID string) ([]*AgentJob, error) {
+	return j.mem.ListAgentJobs(instanceID)
 }
 
 // PutSubscription implements Store.

@@ -38,6 +38,9 @@ func (rt *runtime) activity(tok *store.Token, el *bpmn.Element) error {
 	case bpmn.TypeUserTask:
 		return rt.userTask(tok, el)
 	case bpmn.TypeServiceTask, bpmn.TypeSendTask:
+		if el.Agent != nil {
+			return rt.agentTask(tok, el)
+		}
 		return rt.serviceTask(tok, el)
 	case bpmn.TypeScriptTask:
 		return rt.scriptTask(tok, el)

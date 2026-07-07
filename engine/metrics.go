@@ -21,6 +21,9 @@ type Metrics struct {
 	MessagesCorrelated  atomic.Int64
 	DecisionsEvaluated  atomic.Int64
 	IncidentsCreated    atomic.Int64
+	AgentInvocations    atomic.Int64
+	AgentInputTokens    atomic.Int64
+	AgentOutputTokens   atomic.Int64
 }
 
 // MetricsSnapshot is a point-in-time copy of the counters.
@@ -39,6 +42,9 @@ type MetricsSnapshot struct {
 	MessagesCorrelated  int64 `json:"messagesCorrelated"`
 	DecisionsEvaluated  int64 `json:"decisionsEvaluated"`
 	IncidentsCreated    int64 `json:"incidentsCreated"`
+	AgentInvocations    int64 `json:"agentInvocations"`
+	AgentInputTokens    int64 `json:"agentInputTokens"`
+	AgentOutputTokens   int64 `json:"agentOutputTokens"`
 }
 
 // Snapshot copies all counters.
@@ -58,6 +64,9 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 		MessagesCorrelated:  m.MessagesCorrelated.Load(),
 		DecisionsEvaluated:  m.DecisionsEvaluated.Load(),
 		IncidentsCreated:    m.IncidentsCreated.Load(),
+		AgentInvocations:    m.AgentInvocations.Load(),
+		AgentInputTokens:    m.AgentInputTokens.Load(),
+		AgentOutputTokens:   m.AgentOutputTokens.Load(),
 	}
 }
 

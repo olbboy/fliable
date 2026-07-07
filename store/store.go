@@ -117,6 +117,14 @@ type Store interface {
 	FetchAndLockExternalTasks(topic, workerID string, until, now time.Time, limit int) ([]*ExternalTask, error)
 	ListExternalTasks(instanceID string) ([]*ExternalTask, error)
 
+	// AI agent jobs.
+	PutAgentJob(j *AgentJob) error
+	GetAgentJob(id string) (*AgentJob, error)
+	// FetchAndLockAgentJobs atomically locks up to limit pending agent jobs
+	// on topic for workerID until the given time.
+	FetchAndLockAgentJobs(topic, workerID string, until, now time.Time, limit int) ([]*AgentJob, error)
+	ListAgentJobs(instanceID string) ([]*AgentJob, error)
+
 	// Event subscriptions.
 	PutSubscription(s *Subscription) error
 	DeleteSubscription(id string) error

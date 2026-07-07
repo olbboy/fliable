@@ -418,6 +418,14 @@ func (rt *runtime) cleanupInstanceRecords() {
 			}
 		}
 	}
+	if ajs, err := rt.e.st.ListAgentJobs(rt.inst.ID); err == nil {
+		for _, a := range ajs {
+			if a.State == store.AgentPending {
+				a.State = store.AgentFailed
+				_ = rt.e.st.PutAgentJob(a)
+			}
+		}
+	}
 	// Cancel running call-activity children.
 	if children, err := rt.e.st.ListInstances(store.InstanceFilter{ParentID: rt.inst.ID, State: store.InstanceActive}); err == nil {
 		e := rt.e
@@ -1084,6 +1092,11 @@ func (rt *runtime) cancelWaits(t *store.Token) {
 		if ext, err := rt.e.st.GetExternalTask(t.WaitRef); err == nil && ext.State == store.ExternalPending {
 			ext.State = store.ExternalFailed
 			_ = rt.e.st.PutExternalTask(ext)
+		}
+	case store.TokenWaitAgent:
+		if aj, err := rt.e.st.GetAgentJob(t.WaitRef); err == nil && aj.State == store.AgentPending {
+			aj.State = store.AgentFailed
+			_ = rt.e.st.PutAgentJob(aj)
 		}
 	case store.TokenWaitChild:
 		if t.WaitRef != "" && t.WaitRef != scopeWaitRef {

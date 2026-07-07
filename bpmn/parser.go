@@ -186,6 +186,28 @@ func buildContainer(defs *Definitions, xc xContainer) (*Container, error) {
 		el.Expression = stripExprWrapper(x.Expression.value())
 		el.ResultVar = x.ResultVar.value()
 		el.Retries = atoiDefault(x.Retries.value(), 3)
+		if ag := x.Agent.value(); ag != "" || x.AgentTopic.value() != "" {
+			spec := &AgentSpec{
+				Agent:          ag,
+				Topic:          x.AgentTopic.value(),
+				Prompt:         strings.TrimSpace(x.AgentPrompt),
+				System:         strings.TrimSpace(x.AgentSystem),
+				OutputVar:      x.ResultVar.value(),
+				Model:          x.AgentModel.value(),
+				Effort:         x.AgentEffort.value(),
+				MaxTokens:      atoiDefault(x.AgentMaxTok.value(), 0),
+				HumanApproval:  x.AgentApproval.value() == "true",
+				ApprovalGroups: splitList(x.AgentGroups.value()),
+				Retries:        atoiDefault(x.Retries.value(), 3),
+			}
+			for _, t := range x.AgentTools {
+				spec.Tools = append(spec.Tools, AgentTool{
+					Name: t.Name, Description: t.Description,
+					MCPServer: t.MCPServer, Schema: strings.TrimSpace(t.Schema),
+				})
+			}
+			el.Agent = spec
+		}
 		applyActivity(el, &x.xActivity)
 		if err := add(el); err != nil {
 			return nil, err
@@ -631,6 +653,25 @@ type xServiceTask struct {
 	Expression         extAttr `xml:"expression,attr"`
 	ResultVar          extAttr `xml:"resultVariable,attr"`
 	Retries            extAttr `xml:"retries,attr"`
+
+	// AI agent task attributes.
+	Agent         extAttr      `xml:"agent,attr"`
+	AgentTopic    extAttr      `xml:"agentTopic,attr"`
+	AgentModel    extAttr      `xml:"agentModel,attr"`
+	AgentEffort   extAttr      `xml:"agentEffort,attr"`
+	AgentMaxTok   extAttr      `xml:"agentMaxTokens,attr"`
+	AgentApproval extAttr      `xml:"agentApproval,attr"`
+	AgentGroups   extAttr      `xml:"agentApprovalGroups,attr"`
+	AgentPrompt   string       `xml:"extensionElements>agent>prompt"`
+	AgentSystem   string       `xml:"extensionElements>agent>system"`
+	AgentTools    []xAgentTool `xml:"extensionElements>agent>tool"`
+}
+
+type xAgentTool struct {
+	Name        string `xml:"name,attr"`
+	Description string `xml:"description,attr"`
+	MCPServer   string `xml:"mcpServer,attr"`
+	Schema      string `xml:"schema"`
 }
 
 type xScriptTask struct {
