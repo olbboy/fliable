@@ -20,13 +20,14 @@ import (
 // For multi-node or SQL-backed deployments, implement the Store interface
 // against your database of choice; the engine is storage-agnostic.
 type Journal struct {
-	mu   sync.Mutex
-	mem  *Memory
-	dir  string
-	f    *os.File
-	w    *bufio.Writer
-	n    int // entries since last snapshot
-	opts JournalOptions
+	mu       sync.Mutex
+	mem      *Memory
+	dir      string
+	f        *os.File
+	w        *bufio.Writer
+	n        int // entries since last snapshot
+	opts     JournalOptions
+	onAppend []func(line []byte)
 }
 
 // JournalOptions tunes the journal store.
@@ -269,6 +270,9 @@ func (j *Journal) append(op string, id string, v any) error {
 		}
 	}
 	j.n++
+	for _, fn := range j.onAppend {
+		fn(append([]byte(nil), line...))
+	}
 	if j.n >= j.opts.CompactEvery {
 		return j.compactLocked()
 	}
@@ -282,7 +286,9 @@ func (j *Journal) Compact() error {
 	return j.compactLocked()
 }
 
-func (j *Journal) compactLocked() error {
+// snapshotData serializes the full in-memory state as a snapshot file
+// (also used for replication bootstrap).
+func (j *Journal) snapshotData() ([]byte, error) {
 	j.mem.mu.RLock()
 	snap := snapshotFile{History: j.mem.history}
 	for _, d := range j.mem.definitions {
@@ -315,7 +321,15 @@ func (j *Journal) compactLocked() error {
 	data, err := json.Marshal(&snap)
 	j.mem.mu.RUnlock()
 	if err != nil {
-		return fmt.Errorf("store: marshal snapshot: %w", err)
+		return nil, fmt.Errorf("store: marshal snapshot: %w", err)
+	}
+	return data, nil
+}
+
+func (j *Journal) compactLocked() error {
+	data, err := j.snapshotData()
+	if err != nil {
+		return err
 	}
 
 	tmp := j.snapshotPath() + ".tmp"

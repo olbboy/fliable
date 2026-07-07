@@ -25,6 +25,7 @@ import (
 	"github.com/olbboy/fliable/engine"
 	"github.com/olbboy/fliable/form"
 	"github.com/olbboy/fliable/otel"
+	"github.com/olbboy/fliable/replicate"
 	"github.com/olbboy/fliable/rest"
 	"github.com/olbboy/fliable/store"
 	"github.com/olbboy/fliable/vault"
@@ -72,9 +73,13 @@ Serve flags:
   --deploy string   directory of .bpmn/.dmn files to deploy at startup
   --poll duration   job scheduler poll interval (default 100ms)
   --otel string     OTLP/HTTP endpoint for trace export (e.g. http://collector:4318)
+  --replicate-to string  stream the journal to a standby's replication listener
+  --standby string  run as a warm standby: only the replication listener on
+                    this address (promote by restarting without --standby)
 
 Environment:
-  FLIABLE_MASTER_KEY   enables the encrypted secrets vault (/v1/secrets)
+  FLIABLE_MASTER_KEY           enables the encrypted secrets vault (/v1/secrets)
+  FLIABLE_REPLICATION_SECRET   shared secret for --replicate-to / --standby
 `)
 }
 
@@ -87,14 +92,34 @@ func serve(args []string) error {
 	deployDir := fs.String("deploy", "", "deploy all .bpmn/.dmn files from this directory at startup")
 	poll := fs.Duration("poll", 100*time.Millisecond, "job poll interval")
 	otelEndpoint := fs.String("otel", "", "OTLP/HTTP endpoint for trace export")
+	replicateTo := fs.String("replicate-to", "", "standby replication listener URL")
+	standby := fs.String("standby", "", "run as warm standby on this address")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	start := time.Now()
+	replSecret := os.Getenv("FLIABLE_REPLICATION_SECRET")
+
+	// Warm standby: only the replication listener runs; the engine stays
+	// cold so timers and jobs never double-fire. Promote by restarting
+	// without --standby.
+	if *standby != "" {
+		if *dataDir == "" {
+			return fmt.Errorf("--standby requires --data")
+		}
+		j, err := store.OpenJournal(*dataDir, store.JournalOptions{Fsync: *fsync})
+		if err != nil {
+			return err
+		}
+		defer j.Close()
+		log.Info("standby: replication listener", "addr", *standby, "dir", *dataDir)
+		return http.ListenAndServe(*standby, replicate.NewReceiver(j, replSecret))
+	}
 
 	var st store.Store
+	var journal *store.Journal
 	if *dataDir == "" {
 		st = store.NewMemory()
 		log.Info("storage: in-memory (use --data for durability)")
@@ -104,9 +129,19 @@ func serve(args []string) error {
 			return err
 		}
 		st = j
+		journal = j
 		log.Info("storage: durable journal", "dir", *dataDir, "fsync", *fsync)
 	}
 	defer st.Close()
+
+	if *replicateTo != "" {
+		if journal == nil {
+			return fmt.Errorf("--replicate-to requires --data (journal storage)")
+		}
+		snd := replicate.NewSender(journal, *replicateTo, replSecret, replicate.SenderOptions{Logger: log})
+		defer snd.Close()
+		log.Info("replication: streaming to standby", "target", *replicateTo)
+	}
 
 	decisions := dmn.NewRegistry()
 	forms := form.NewRegistry(st)
