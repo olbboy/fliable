@@ -47,7 +47,12 @@ const stop = fliable.events((ev) => console.log(ev.type, ev.elementId), {
 ```
 
 The same client covers instances, tasks, messages/signals, incidents,
-bulk operations, external workers, **AI agent jobs**, history and metrics.
+bulk operations, external workers, **AI agent jobs**, history and metrics —
+plus **live instance migration**, **schema-driven forms** (`taskForm(id)`
+returns the field schema and prefill variables; render with your own
+inputs), **webhook channel management**, **secrets administration** and
+**process analytics** (`processAnalytics()` → cycle times, incident and
+throughput stats per definition).
 
 ## React hooks (headless)
 

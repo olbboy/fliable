@@ -1,6 +1,6 @@
 {
   "name": "@fliable/sdk",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Headless TypeScript SDK for the Fliable workflow & BPM engine — framework-agnostic client + React hooks for any UI (shadcn, Base UI, Vue, Svelte).",
   "license": "Apache-2.0",
   "type": "module",

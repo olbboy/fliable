@@ -32,11 +32,27 @@ The three goals, restated:
 | Durable crash-safe store (WAL + snapshot), single static binary, ~2 ms boot with recovery | **pre-existing** | `store/journal.go`, `cmd/fliable` |
 | Prometheus metrics, SSE event stream, event-sourced history | **pre-existing / extended** | `rest`, `engine/metrics.go` |
 
-**Out of scope this line** (roadmap NFRs, tracked for later): active-active
-HA / clustering, a first-party Postgres `Store` implementation (the
-interface is the seam and is ready), full OpenTelemetry export (only
-W3C trace-context propagation is wired today), OIDC/SAML/LDAP IDM, a
-secrets/OAuth vault, gRPC, Helm chart / K8s Operator.
+Delivered in the 1.2 line (previously out of scope):
+
+| Capability | Status | Where |
+|---|---|---|
+| SQL persistence — full `Store` over `database/sql` (Postgres/CockroachDB, MySQL, SQLite dialects); driver injected by the app so `go.mod` stays zero-dep; optimistic claims allow shared-database engine replicas | **done** | `store/sqlstore.go`, `store/sqltest` |
+| Hot-standby replication — journal streaming over HTTP, snapshot bootstrap, auto-resync, dedup; promotion = start an engine on the follower | **done** | `store/replicate.go`, `replicate/`, `--replicate-to` / `--standby` |
+| OIDC/JWT authentication — RS256/384/512 + ES256/384/512 against fetched or static JWKS; role mapping, tenant claims | **done** | `rest/oidc.go` |
+| Encrypted secrets vault — AES-256-GCM at rest, `Context.Secret` for handlers, admin REST CRUD | **done** | `vault/`, `rest/vaultapi.go` |
+| OpenTelemetry — OTLP/HTTP JSON span export derived from the event stream, traceparent-parented | **done** | `otel/`, `--otel` |
+| Live instance migration with dry-run (D2 P1) | **done** | `engine/migrate.go` |
+| Schema-driven forms (D4 P0) | **done** | `form/`, `rest/formapi.go` |
+| Webhook event channels + idempotency (D5) | **done** | `rest/webhook.go` |
+| Process analytics — cycle times, incident/throughput stats (D13 P1) | **done** | `rest/analytics.go` |
+| Packaging — Dockerfile (scratch), Helm chart, K8s manifests | **done** | `Dockerfile`, `deploy/` |
+
+**Still out of scope** (documented, not dropped): active-active
+multi-node clustering (the standby is warm, not active-active), gRPC
+(protobuf codegen conflicts with the zero-dependency rule; OpenAPI +
+REST + SSE is the contract surface), SAML/LDAP (OIDC covers modern IdPs;
+both bridge to OIDC), a Kubernetes Operator, and CMMN 1.1 (a second
+execution paradigm — deliberate, not incidental).
 
 ---
 
@@ -101,15 +117,17 @@ provider or MCP toolchain plug in.
 
 ## Roadmap domain coverage summary
 
-| Domain | This line | Notes |
+| Domain | Status | Notes |
 |---|---|---|
-| D2 — migration & versioning | partial | per-tenant immutable versioning + drain; live-instance migration DSL not yet |
-| D7 — human work | advanced | full task API pre-existing; **headless work SDK** shipped |
+| D2 — migration & versioning | **advanced** | per-tenant immutable versioning + drain; **live migration with activity map, var transforms and dry-run validation** |
+| D4 — forms | **core** | schema-driven engine with validation/conditions/defaults; headless rendering by design |
+| D5 — eventing & triggers | core | webhook channels with secrets, correlation, variable mapping, idempotency; Kafka/AMQP adapters live outside core via external workers |
+| D7 — human work | advanced | full task API; **headless work SDK**; form-bound completions validate server-side |
 | D9 — AI agent orchestration & governance | **core + leapfrogs** | see Goal 3 |
-| D10 — operations & observability | advanced | suspend/resume, bulk ops, incident resolve, **history TTL**, trace-context; full OTel + time-travel UI later |
-| D11 — identity, security, tenancy | core | auth chain, RBAC, tenant isolation; IDM/secrets-vault later |
-| D13 — query & index | core | rich filters + keyset pagination; pluggable index projection later |
-| NFRs | partial | OpenAPI, SSE, TS SDK, single binary, history TTL done; HA/Postgres/gRPC/Helm later |
+| D10 — operations & observability | **advanced** | suspend/resume, bulk ops, incident resolve, history TTL, **OpenTelemetry span export**, analytics endpoint; time-travel UI later |
+| D11 — identity, security, tenancy | **advanced** | auth chain + **OIDC/JWKS**, RBAC, tenant isolation, **encrypted secrets vault** |
+| D13 — query & index | core | rich filters + keyset pagination on memory, journal **and SQL**; analytics from the event log |
+| NFRs | **substantial** | OpenAPI, SSE, TS SDK, single binary, history TTL, **SQL store, hot-standby DR, OTel, Docker/Helm/K8s**; active-active clustering, gRPC, Operator later |
 
 The engine's zero-dependency, event-sourced, single-binary foundation is
 unchanged — every capability above was added without pulling a single

@@ -9,14 +9,19 @@ import type {
   AgentUsage,
   Definition,
   ExternalTask,
+  FormDefinition,
   HistoryEvent,
   Incident,
   Instance,
   InstanceQuery,
+  MigrationPlan,
+  MigrationReport,
   Page,
+  ProcessStats,
   Task,
   TaskQuery,
   VarFilter,
+  WebhookChannel,
 } from "./types";
 
 export interface FliableOptions {
@@ -191,9 +196,59 @@ export class FliableClient {
     return this.req("POST", `/v1/agent-jobs/${id}/fail`, { workerId, message, errorCode });
   }
 
+  // ---- migration ----
+  /** Validate (dryRun) or apply a live migration onto another definition version. */
+  migrateInstance(id: string, plan: MigrationPlan): Promise<MigrationReport> {
+    return this.req("POST", `/v1/instances/${id}/migrate`, plan);
+  }
+
+  // ---- forms (headless: schema in, your components out) ----
+  deployForm(def: FormDefinition): Promise<FormDefinition> {
+    return this.req("POST", `/v1/forms`, def);
+  }
+  listForms(): Promise<FormDefinition[]> {
+    return this.req("GET", `/v1/forms`);
+  }
+  getForm(key: string): Promise<FormDefinition> {
+    return this.req("GET", `/v1/forms/${encodeURIComponent(key)}`);
+  }
+  deleteForm(key: string): Promise<void> {
+    return this.req("DELETE", `/v1/forms/${encodeURIComponent(key)}`);
+  }
+  /** The form bound to a task plus current variables for prefill. */
+  taskForm(taskId: string): Promise<{ form: FormDefinition; variables: Record<string, unknown> }> {
+    return this.req("GET", `/v1/tasks/${taskId}/form`);
+  }
+
+  // ---- secrets (admin) ----
+  listSecretNames(): Promise<{ names: string[] }> {
+    return this.req("GET", `/v1/secrets`);
+  }
+  putSecret(name: string, value: string): Promise<void> {
+    return this.req("PUT", `/v1/secrets/${encodeURIComponent(name)}`, { value });
+  }
+  deleteSecret(name: string): Promise<void> {
+    return this.req("DELETE", `/v1/secrets/${encodeURIComponent(name)}`);
+  }
+
+  // ---- webhook channels (admin) ----
+  putWebhook(name: string, ch: Omit<WebhookChannel, "name">): Promise<WebhookChannel> {
+    return this.req("PUT", `/v1/webhooks/${encodeURIComponent(name)}`, ch);
+  }
+  listWebhooks(): Promise<WebhookChannel[]> {
+    return this.req("GET", `/v1/webhooks`);
+  }
+  deleteWebhook(name: string): Promise<void> {
+    return this.req("DELETE", `/v1/webhooks/${encodeURIComponent(name)}`);
+  }
+
   // ---- observability ----
   stats(): Promise<Record<string, unknown>> {
     return this.req("GET", `/v1/stats`);
+  }
+  /** Per-process cycle times, state counts, incidents and 24h throughput. */
+  processAnalytics(): Promise<ProcessStats[]> {
+    return this.req("GET", `/v1/analytics/processes`);
   }
 
   /**

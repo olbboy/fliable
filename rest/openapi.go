@@ -27,7 +27,7 @@ var openAPISpec = map[string]any{
 	"openapi": "3.1.0",
 	"info": map[string]any{
 		"title":       "Fliable API",
-		"version":     "1.0.0",
+		"version":     "1.2.0",
 		"description": "Compact, high-efficiency BPMN 2.0 / DMN workflow & BPM platform.",
 		"license":     map[string]any{"name": "Apache-2.0"},
 	},
@@ -133,6 +133,48 @@ var openAPISchemas = map[string]any{
 			"variables":    map[string]any{"type": "object"},
 		},
 	},
+	"MigrationPlan": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"targetDefinitionId": map[string]any{"type": "string"},
+			"activityMap":        map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"varTransforms":      map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"dryRun":             map[string]any{"type": "boolean"},
+		},
+		"required": []any{"targetDefinitionId"},
+	},
+	"MigrationReport": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"instanceId":         map[string]any{"type": "string"},
+			"targetDefinitionId": map[string]any{"type": "string"},
+			"tokenMoves":         map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+			"issues":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"applied":            map[string]any{"type": "boolean"},
+		},
+	},
+	"Form": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"key":    map[string]any{"type": "string"},
+			"name":   map[string]any{"type": "string"},
+			"fields": map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+		},
+		"required": []any{"key", "fields"},
+	},
+	"WebhookChannel": map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name":            map[string]any{"type": "string"},
+			"kind":            map[string]any{"type": "string", "enum": []any{"message", "signal"}},
+			"event":           map[string]any{"type": "string"},
+			"correlationExpr": map[string]any{"type": "string"},
+			"dedupeExpr":      map[string]any{"type": "string"},
+			"secret":          map[string]any{"type": "string"},
+			"vars":            map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+		},
+		"required": []any{"event"},
+	},
 }
 
 func opJSON(summary string, reqSchema, respSchema string, params []any) map[string]any {
@@ -200,13 +242,44 @@ var openAPIPaths = map[string]any{
 	"/v1/agent-jobs/fetch":         map[string]any{"post": opJSON("Fetch & lock agent jobs for an AI worker", "", "", nil)},
 	"/v1/agent-jobs/{id}/complete": map[string]any{"post": opJSON("Complete an agent job with structured output", "", "", pathID())},
 	"/v1/agent-jobs/{id}/fail":     map[string]any{"post": opJSON("Fail an agent job", "", "", pathID())},
-	"/v1/events":                   map[string]any{"get": map[string]any{"summary": "Server-sent event stream", "responses": map[string]any{"200": map[string]any{"description": "text/event-stream"}}}},
-	"/healthz":                     map[string]any{"get": map[string]any{"summary": "Liveness", "responses": map[string]any{"200": map[string]any{"description": "OK"}}}},
-	"/metrics":                     map[string]any{"get": map[string]any{"summary": "Prometheus metrics", "responses": map[string]any{"200": map[string]any{"description": "text/plain"}}}},
+	"/v1/instances/{id}/migrate":   map[string]any{"post": opJSON("Migrate a live instance to another definition version (dry-run supported)", "MigrationPlan", "MigrationReport", pathID())},
+	"/v1/forms": map[string]any{
+		"post": opJSON("Deploy a form definition (JSON)", "Form", "Form", nil),
+		"get":  opJSON("List form definitions", "", "", nil),
+	},
+	"/v1/forms/{key}": map[string]any{
+		"get":    opJSON("Get a form definition", "", "Form", pathKey()),
+		"delete": opJSON("Delete a form definition", "", "", pathKey()),
+	},
+	"/v1/tasks/{id}/form": map[string]any{"get": opJSON("Form bound to a task, plus current variables for prefill", "", "", pathID())},
+	"/v1/secrets":         map[string]any{"get": opJSON("List secret names (never values)", "", "", nil)},
+	"/v1/secrets/{name}": map[string]any{
+		"put":    opJSON("Store an encrypted secret", "", "", pathName()),
+		"delete": opJSON("Delete a secret", "", "", pathName()),
+	},
+	"/v1/secrets/{name}/value": map[string]any{"get": opJSON("Read a secret value (admin)", "", "", pathName())},
+	"/v1/webhooks":             map[string]any{"get": opJSON("List webhook channels", "", "", nil)},
+	"/v1/webhooks/{name}": map[string]any{
+		"put":    opJSON("Configure a webhook channel (message/signal mapping, correlation, dedupe, secret)", "WebhookChannel", "WebhookChannel", pathName()),
+		"post":   opJSON("Ingest a webhook event (authenticated by the channel secret)", "", "", pathName()),
+		"delete": opJSON("Delete a webhook channel", "", "", pathName()),
+	},
+	"/v1/analytics/processes": map[string]any{"get": opJSON("Per-process cycle times, state counts, incidents, throughput", "", "", nil)},
+	"/v1/events":              map[string]any{"get": map[string]any{"summary": "Server-sent event stream", "responses": map[string]any{"200": map[string]any{"description": "text/event-stream"}}}},
+	"/healthz":                map[string]any{"get": map[string]any{"summary": "Liveness", "responses": map[string]any{"200": map[string]any{"description": "OK"}}}},
+	"/metrics":                map[string]any{"get": map[string]any{"summary": "Prometheus metrics", "responses": map[string]any{"200": map[string]any{"description": "text/plain"}}}},
 }
 
 func pathID() []any {
 	return []any{map[string]any{"name": "id", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}
+}
+
+func pathKey() []any {
+	return []any{map[string]any{"name": "key", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}
+}
+
+func pathName() []any {
+	return []any{map[string]any{"name": "name", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}
 }
 
 const docsHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">

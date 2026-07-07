@@ -4,6 +4,63 @@ All notable changes to Fliable are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the engine follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-07-07
+
+The remaining production pillars, still without a single entry in
+`go.mod`: SQL persistence, disaster recovery, enterprise identity,
+secrets, OpenTelemetry, forms, live migration, event channels and
+Kubernetes packaging.
+
+### Persistence & high availability
+- `store.SQL` — the full Store contract over `database/sql`
+  (Postgres/CockroachDB, MySQL, SQLite dialects). The embedding app
+  imports its driver; Fliable stays zero-dependency. Optimistic
+  single-row claims let several engine replicas share one database.
+  `store/sqltest` ships an in-memory driver so it all tests without a
+  running database.
+- Hot-standby replication (`replicate` package): the journal streams to
+  a warm follower over HTTP (snapshot bootstrap + ordered line
+  streaming, automatic full resync on any error, history deduplicated by
+  sequence). Promotion = start an engine on the follower's store.
+  `fliable serve --replicate-to` / `--standby`.
+
+### Identity, secrets
+- OIDC/JWT bearer auth against any identity provider: RS256/384/512 and
+  ES256/384/512 via fetched-and-cached or static JWKS, issuer/audience
+  checks, nested role claims with mapping, tenant-claim confinement.
+  Stdlib crypto only.
+- Encrypted secrets vault (`vault` package + `/v1/secrets`): AES-256-GCM
+  at rest, master key from the environment, values reachable from
+  service handlers via `Context.Secret` — never through process
+  variables or history. `FLIABLE_MASTER_KEY` enables it in the binary.
+
+### Operations
+- Live instance migration with dry-run validation
+  (`POST /v1/instances/{id}/migrate`): activity mapping, variable
+  transforms, wait-state compatibility checks; open tasks, timers and
+  message/signal subscriptions carry over (names refreshed from the
+  target model).
+- OpenTelemetry trace export (`otel` package, `--otel` flag): spans per
+  instance and element derived from the history stream, parented under
+  the caller's W3C traceparent, OTLP/HTTP JSON to any collector.
+- `GET /v1/analytics/processes`: cycle times (avg/p50/p95), state
+  counts, open incidents/tasks, 24h throughput per definition.
+
+### Forms & event channels
+- Schema-driven form engine (`form` package): typed fields, validation
+  rules, conditional visibility, defaults; bound to user tasks by
+  formKey; invalid completions rejected with 422 before any state
+  change; `GET /v1/tasks/{id}/form` feeds any headless renderer.
+- Webhook event channels (`/v1/webhooks/{name}`): per-channel secret,
+  payload-expression correlation and variable mapping onto messages or
+  signals, idempotency via header or configured dedupe expression.
+
+### Packaging & SDK
+- Dockerfile (scratch image, ~8 MB static binary), Helm chart with
+  optional warm standby, plain Kubernetes manifests (`deploy/`).
+- `@fliable/sdk` 1.2.0: migration, forms, webhooks, secrets and
+  analytics APIs added to the typed client.
+
 ## [1.1.0] — 2026-07-07
 
 Production-hardening, universal UI compatibility, and first-class AI agent

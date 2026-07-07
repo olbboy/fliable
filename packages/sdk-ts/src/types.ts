@@ -165,3 +165,84 @@ export interface TaskQuery {
   desc?: boolean;
   limit?: number;
 }
+
+// ---- live migration (D2) ----
+
+export interface MigrationPlan {
+  targetDefinitionId: string;
+  /** Element ID renames, old -> new (identity by default). */
+  activityMap?: Record<string, string>;
+  /** Variable derivations: name -> expression over pre-migration vars. */
+  varTransforms?: Record<string, string>;
+  /** Validate and report without applying. */
+  dryRun?: boolean;
+}
+
+export interface TokenMove {
+  tokenId: string;
+  from: string;
+  to: string;
+  state: string;
+}
+
+export interface MigrationReport {
+  instanceId: string;
+  targetDefinitionId: string;
+  tokenMoves: TokenMove[];
+  issues?: string[];
+  applied: boolean;
+}
+
+// ---- forms (headless) ----
+
+export type FormFieldType = "string" | "text" | "number" | "boolean" | "enum" | "date";
+
+export interface FormField {
+  id: string;
+  label?: string;
+  type: FormFieldType;
+  required?: boolean;
+  options?: string[];
+  min?: number;
+  max?: number;
+  pattern?: string;
+  default?: unknown;
+  /** Expression over the submitted variables; false hides the field. */
+  visibleIf?: string;
+  readOnly?: boolean;
+}
+
+export interface FormDefinition {
+  key: string;
+  name?: string;
+  fields: FormField[];
+}
+
+// ---- webhook channels ----
+
+export interface WebhookChannel {
+  name: string;
+  kind?: "message" | "signal";
+  event: string;
+  correlationExpr?: string;
+  dedupeExpr?: string;
+  secret?: string;
+  vars?: Record<string, string>;
+  tenantId?: string;
+}
+
+// ---- analytics ----
+
+export interface ProcessStats {
+  definitionKey: string;
+  active: number;
+  completed: number;
+  terminated: number;
+  suspended: number;
+  openIncidents: number;
+  openTasks: number;
+  avgDurationMs?: number;
+  p50DurationMs?: number;
+  p95DurationMs?: number;
+  completedLast24h: number;
+}

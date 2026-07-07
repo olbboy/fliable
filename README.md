@@ -22,7 +22,9 @@ Fliable was designed feature-by-feature to beat the classic Java engines (Flowab
 | Deployment | one static binary, ~10 MB | JVM + WAR/Spring Boot, hundreds of MB |
 | Startup (with recovery) | **~2 ms** | 10–30 s |
 | Memory floor | ~15 MB RSS | 512 MB–2 GB heap |
-| Persistence | built-in crash-safe journal + snapshots, zero config; pluggable `Store` interface for SQL/anything | external RDBMS + schema migrations required |
+| Persistence | built-in crash-safe journal + snapshots, zero config; **SQL store included** (Postgres/MySQL/SQLite via `database/sql`, driver injected) | external RDBMS + schema migrations required |
+| Disaster recovery | **hot-standby journal replication built in** — snapshot bootstrap, auto-resync, ~2 ms promotion | database-level tooling only |
+| Live migration | **activity-mapped migration of running instances with dry-run validation** | chronic pain point |
 | Concurrency | goroutines + striped per-instance locks, no DB row-lock contention | thread pools serialized through database locking |
 | Expressions | sandboxed, deterministic language — no reflection, no method calls, no I/O, compiled & cached | JUEL/scripting engines with a history of sandbox escapes |
 | Service tasks | type-safe Go handlers **and** Zeebe-style external workers over REST — both built in | Java delegates in-JVM; external tasks bolted on |
@@ -32,11 +34,12 @@ Fliable was designed feature-by-feature to beat the classic Java engines (Flowab
 | Model migration | reads Flowable/Camunda/Activiti extension attributes and `${...}` expressions as-is | — |
 | AI agents | agent task is **just another token** — provider-agnostic, MCP-native, governed by the same event log; in-process or external AI worker | Spring AI, vendored providers, bolted on |
 | UI | headless-first: typed TypeScript SDK + React hooks (no markup) bind to any framework — shadcn, Base UI, Vue, Svelte | web apps you adopt wholesale |
-| Multi-tenancy & auth | tenant isolation, pluggable auth chain (API key / bearer / signed token), per-route RBAC, CORS — built in | add-on / commercial |
+| Multi-tenancy & auth | tenant isolation, pluggable auth chain (API key / bearer / signed token / **OIDC+JWKS**), per-route RBAC, CORS, **encrypted secrets vault** — built in | add-on / commercial |
+| Observability | Prometheus + SSE + **zero-dep OpenTelemetry trace export** | metrics, weaker tracing |
 | Validation | aggregate: every model problem reported in one pass | fail-fast, one error at a time |
 | Dependencies | **zero** (Go standard library only) | large dependency trees |
 
-The trade-off Fliable makes: it is a **single-node embedded-first engine** (like SQLite is to databases). The `Store` interface is the seam for teams that need SQL-backed or replicated deployments.
+The trade-off Fliable makes: execution is **single-node embedded-first** (like SQLite is to databases) — but the storage story scales past that: a built-in SQL store shares one database across replicas, and built-in hot-standby replication gives DR with ~2 ms promotion. Active-active clustering is the one thing deliberately left out.
 
 ## Quick start — server
 
@@ -119,13 +122,39 @@ reg.RegisterXML(dmnXML)
 eng := engine.New(st, engine.WithDecisionEvaluator(reg))
 ```
 
-## Durability without a database
+## Durability — journal or SQL, your choice
 
-`store.OpenJournal` gives you crash-safe persistence from the binary alone: every mutation appends to a JSON write-ahead journal, compacted periodically into an atomic snapshot. Torn final writes from a crash are detected and dropped; recovery is snapshot + replay. `kill -9` tested. Need Postgres or multi-node? Implement the `store.Store` interface — the engine is storage-agnostic.
+`store.OpenJournal` gives you crash-safe persistence from the binary alone: every mutation appends to a JSON write-ahead journal, compacted periodically into an atomic snapshot. Torn final writes from a crash are detected and dropped; recovery is snapshot + replay. `kill -9` tested.
+
+Prefer a database? `store.NewSQL(db, ...)` runs the same engine on **Postgres, MySQL or SQLite** through `database/sql` — you import the driver, Fliable's `go.mod` stays empty. Optimistic single-row claims mean several engine replicas can share one database.
+
+```go
+db, _ := sql.Open("pgx", dsn) // driver lives in YOUR go.mod
+st, _ := store.NewSQL(db, store.SQLOptions{Dialect: store.DialectPostgres})
+eng := engine.New(st)
+```
+
+## Disaster recovery — warm standby built in
+
+A leader journal streams every entry to a standby over HTTP (`replicate` package or `--replicate-to` / `--standby` flags): snapshot bootstrap, ordered streaming, automatic full resync after any hiccup. Promotion is starting an engine on the follower's store — Fliable's normal ~2 ms boot. RPO is the in-flight batch; no external replication stack.
+
+## Live instance migration
+
+Deployed v2 of a process while a thousand v1 instances sleep on user tasks and timers? `POST /v1/instances/{id}/migrate` (or `eng.MigrateInstance`) moves them: element IDs map through an activity map, variables can be derived with expressions, and the plan **validates completely before anything is written** — with `dryRun` for a safe preflight. Open tasks, timers and message/signal subscriptions carry over; renamed messages re-correlate against the new model.
+
+## Forms — schema in, your components out
+
+JSON form definitions (typed fields, required/min/max/pattern rules, expression-driven conditional visibility, defaults) bind to user tasks by `formKey`. The engine rejects invalid submissions with a 422 **before** any state changes; `GET /v1/tasks/{id}/form` hands any client the schema plus prefill variables. Rendering stays yours — the same headless philosophy as the SDK.
+
+## Webhook event channels
+
+`PUT /v1/webhooks/{name}` maps inbound HTTP events onto messages or signals: per-channel secrets (external systems never hold platform credentials), payload-expression correlation and variable mapping, and idempotency via header or a configured dedupe expression. A process with no user task is an automation — webhook channels make Fliable an n8n-style automation engine on BPMN semantics.
 
 ## Observability
 
 - `GET /metrics` — Prometheus counters for instances, tasks, jobs, timers, incidents
+- **OpenTelemetry** — `--otel http://collector:4318` exports a span per instance and per executed element (OTLP/HTTP JSON, no SDK dependency), parented under the caller's W3C `traceparent`
+- `GET /v1/analytics/processes` — cycle times (avg/p50/p95), state counts, open incidents/tasks and 24h throughput per definition
 - `GET /v1/events` — the entire engine event stream over SSE, filterable by instance and type
 - `GET /v1/instances/{id}/history` — complete event-sourced audit trail per instance
 - `engine.OnEvent(...)` — the same stream in-process
@@ -159,7 +188,12 @@ eng := engine.New(st, engine.WithDefaultAgent(myInvoker)) // or leave agents to 
 - **Tenancy** — every record carries a `TenantID`; definitions version per
   `(tenant, key)`; queries and the REST layer confine callers to their tenant.
 - **AuthN** — a pluggable `Authenticator` chain: API keys, static bearer
-  tokens, or HMAC-SHA256 signed tokens (`MintToken`/`ParseToken`).
+  tokens, HMAC-SHA256 signed tokens (`MintToken`/`ParseToken`), or **OIDC**
+  — RS256/ES256 JWTs verified against your IdP's JWKS (Keycloak, Auth0,
+  Entra ID, Okta) with role mapping and tenant claims, stdlib crypto only.
+- **Secrets** — a built-in vault: AES-256-GCM encrypted at rest, master key
+  from the environment, values reachable from service handlers via
+  `ctx.Secret(name)` — never through variables, expressions or history.
 - **AuthZ** — per-route RBAC across `viewer` / `operator` / `admin`.
 - **CORS** — configurable middleware for browser clients.
 - **Retention** — history TTL housekeeping and `PurgeInstance` for
@@ -224,16 +258,21 @@ One "lifecycle" is the complete journey — start event, script task with expres
 ## Repository layout
 
 ```
-bpmn/     BPMN 2.0 model + XML parser + validation
-expr/     sandboxed expression language
-store/    persistence: interface, memory store, durable journal store
-engine/   the token-based process engine
-dmn/      decision tables
-rest/     HTTP API + SSE + metrics + auth/RBAC + CORS + OpenAPI
-cmd/      the fliable binary
-packages/ headless TypeScript SDK (@fliable/sdk) for any UI framework
-examples/ runnable examples and sample models
-docs/     architecture & reference documentation
+bpmn/      BPMN 2.0 model + XML parser + validation
+expr/      sandboxed expression language
+store/     persistence: interface, memory, durable journal, SQL (database/sql)
+engine/    the token-based process engine + live migration
+dmn/       decision tables
+form/      schema-driven form engine (headless)
+vault/     encrypted secrets store (AES-256-GCM)
+otel/      zero-dep OpenTelemetry OTLP/HTTP trace exporter
+replicate/ hot-standby journal replication (leader/follower)
+rest/      HTTP API + SSE + metrics + auth/OIDC/RBAC + CORS + webhooks + OpenAPI
+cmd/       the fliable binary
+deploy/    Dockerfile companion: Helm chart + Kubernetes manifests
+packages/  headless TypeScript SDK (@fliable/sdk) for any UI framework
+examples/  runnable examples and sample models
+docs/      architecture & reference documentation
 ```
 
 ## License
