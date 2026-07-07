@@ -151,18 +151,32 @@ func (s *Server) handleStartInstance(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListInstances(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	limit := pageLimit(r)
 	insts, err := s.e.ListInstances(store.InstanceFilter{
+		TenantID:      tenantOf(r),
 		DefinitionKey: q.Get("definitionKey"),
+		DefinitionID:  q.Get("definitionId"),
 		BusinessKey:   q.Get("businessKey"),
 		State:         store.InstanceState(q.Get("state")),
 		ParentID:      q.Get("parentId"),
-		Limit:         queryInt(r, "limit", 200),
+		Vars:          parseVarMatches(r),
+		StartedAfter:  queryTime(r, "startedAfter"),
+		StartedBefore: queryTime(r, "startedBefore"),
+		EndedAfter:    queryTime(r, "endedAfter"),
+		EndedBefore:   queryTime(r, "endedBefore"),
+		Cursor:        q.Get("cursor"),
+		Desc:          queryBool(r, "desc"),
+		Limit:         limit,
 	})
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.json(w, http.StatusOK, insts)
+	last := ""
+	if n := len(insts); n > 0 {
+		last = insts[n-1].ID
+	}
+	s.writePage(w, insts, len(insts), limit, last)
 }
 
 func (s *Server) handleGetInstance(w http.ResponseWriter, r *http.Request) {
@@ -229,20 +243,34 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	if q.Get("state") == "" {
 		state = store.TaskCreated
 	}
+	limit := pageLimit(r)
 	tasks, err := s.e.ListTasks(store.TaskFilter{
+		TenantID:       tenantOf(r),
 		InstanceID:     q.Get("instanceId"),
 		Assignee:       q.Get("assignee"),
+		Unassigned:     queryBool(r, "unassigned"),
 		CandidateUser:  q.Get("candidateUser"),
 		CandidateGroup: q.Get("candidateGroup"),
 		DefinitionKey:  q.Get("definitionKey"),
+		ElementID:      q.Get("elementId"),
 		State:          state,
-		Limit:          queryInt(r, "limit", 200),
+		Vars:           parseVarMatches(r),
+		CreatedAfter:   queryTime(r, "createdAfter"),
+		CreatedBefore:  queryTime(r, "createdBefore"),
+		DueBefore:      queryTime(r, "dueBefore"),
+		Cursor:         q.Get("cursor"),
+		Desc:           queryBool(r, "desc"),
+		Limit:          limit,
 	})
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.json(w, http.StatusOK, tasks)
+	last := ""
+	if n := len(tasks); n > 0 {
+		last = tasks[n-1].ID
+	}
+	s.writePage(w, tasks, len(tasks), limit, last)
 }
 
 func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {

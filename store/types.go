@@ -12,6 +12,7 @@ import "time"
 // version (safe hot deployment).
 type Definition struct {
 	ID         string    `json:"id"`
+	TenantID   string    `json:"tenantId,omitempty"`
 	Key        string    `json:"key"`
 	Version    int       `json:"version"`
 	Name       string    `json:"name"`
@@ -88,10 +89,14 @@ type MultiInstanceState struct {
 // Instance is a running or finished process instance.
 type Instance struct {
 	ID            string        `json:"id"`
+	TenantID      string        `json:"tenantId,omitempty"`
 	DefinitionID  string        `json:"definitionId"`
 	DefinitionKey string        `json:"definitionKey"`
 	BusinessKey   string        `json:"businessKey,omitempty"`
 	State         InstanceState `json:"state"`
+	// Suspended pauses execution: no tokens advance and no jobs/timers
+	// fire until the instance is resumed. Orthogonal to State.
+	Suspended bool `json:"suspended,omitempty"`
 
 	// ParentID/ParentTokenID link a call-activity child to its parent.
 	ParentID      string `json:"parentId,omitempty"`
@@ -124,6 +129,7 @@ const (
 // Task is a user task waiting for a human.
 type Task struct {
 	ID              string    `json:"id"`
+	TenantID        string    `json:"tenantId,omitempty"`
 	InstanceID      string    `json:"instanceId"`
 	TokenID         string    `json:"tokenId"`
 	ElementID       string    `json:"elementId"`

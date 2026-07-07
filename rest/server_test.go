@@ -98,6 +98,31 @@ func (c *client) doList(method, path string, want int) []map[string]any {
 	return out
 }
 
+// doPage decodes a paginated collection envelope ({items,count,nextCursor})
+// and returns the items.
+func (c *client) doPage(method, path string, want int) []map[string]any {
+	c.t.Helper()
+	req, _ := http.NewRequest(method, c.srv.URL+path, nil)
+	if c.key != "" {
+		req.Header.Set("X-Api-Key", c.key)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != want {
+		c.t.Fatalf("%s %s = %d, want %d", method, path, resp.StatusCode, want)
+	}
+	var env struct {
+		Items      []map[string]any `json:"items"`
+		Count      int              `json:"count"`
+		NextCursor string           `json:"nextCursor"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&env)
+	return env.Items
+}
+
 func TestFullAPILifecycle(t *testing.T) {
 	c := newClient(t)
 
@@ -122,7 +147,7 @@ func TestFullAPILifecycle(t *testing.T) {
 	}
 
 	// Task queue.
-	tasks := c.doList("GET", "/v1/tasks?assignee=alice", http.StatusOK)
+	tasks := c.doPage("GET", "/v1/tasks?assignee=alice", http.StatusOK)
 	if len(tasks) != 1 {
 		t.Fatalf("tasks = %v", tasks)
 	}
@@ -203,7 +228,7 @@ func TestAPIKeyAuth(t *testing.T) {
 	// Everything else requires the key.
 	c.do("GET", "/v1/instances", nil, http.StatusUnauthorized)
 	c.key = "sekret"
-	c.doList("GET", "/v1/instances", http.StatusOK)
+	c.doPage("GET", "/v1/instances", http.StatusOK)
 }
 
 func TestMessagesAndDecisionsAPI(t *testing.T) {

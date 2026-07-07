@@ -8,23 +8,44 @@ import (
 // ErrNotFound is returned when a record does not exist.
 var ErrNotFound = errors.New("store: not found")
 
-// InstanceFilter narrows ListInstances.
+// InstanceFilter narrows ListInstances. Zero-value fields are ignored.
+// Results are ordered by ID (time-sortable); Cursor holds the last ID from
+// the previous page for stable keyset pagination.
 type InstanceFilter struct {
+	TenantID      string
 	DefinitionKey string
+	DefinitionID  string
 	BusinessKey   string
 	State         InstanceState
 	ParentID      string
+	Vars          []VarMatch
+	StartedAfter  time.Time
+	StartedBefore time.Time
+	EndedAfter    time.Time
+	EndedBefore   time.Time
+	Cursor        string
+	Desc          bool
 	Limit         int
 }
 
-// TaskFilter narrows ListTasks.
+// TaskFilter narrows ListTasks. Vars match against the task's instance
+// variables. Zero-value fields are ignored.
 type TaskFilter struct {
+	TenantID       string
 	InstanceID     string
 	Assignee       string
+	Unassigned     bool
 	CandidateUser  string
 	CandidateGroup string
 	State          TaskState
 	DefinitionKey  string
+	ElementID      string
+	Vars           []VarMatch
+	CreatedAfter   time.Time
+	CreatedBefore  time.Time
+	DueBefore      time.Time
+	Cursor         string
+	Desc           bool
 	Limit          int
 }
 

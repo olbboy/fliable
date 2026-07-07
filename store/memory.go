@@ -138,7 +138,13 @@ func (m *Memory) ListInstances(f InstanceFilter) ([]*Instance, error) {
 	defer m.mu.RUnlock()
 	var out []*Instance
 	for _, inst := range m.instances {
+		if f.TenantID != "" && inst.TenantID != f.TenantID {
+			continue
+		}
 		if f.DefinitionKey != "" && inst.DefinitionKey != f.DefinitionKey {
+			continue
+		}
+		if f.DefinitionID != "" && inst.DefinitionID != f.DefinitionID {
 			continue
 		}
 		if f.BusinessKey != "" && inst.BusinessKey != f.BusinessKey {
@@ -150,9 +156,21 @@ func (m *Memory) ListInstances(f InstanceFilter) ([]*Instance, error) {
 		if f.ParentID != "" && inst.ParentID != f.ParentID {
 			continue
 		}
+		if !inTimeWindow(inst.StartedAt, f.StartedAfter, f.StartedBefore) {
+			continue
+		}
+		if (!f.EndedAfter.IsZero() || !f.EndedBefore.IsZero()) && !inTimeWindow(inst.EndedAt, f.EndedAfter, f.EndedBefore) {
+			continue
+		}
+		if len(f.Vars) > 0 && !MatchVars(inst.Variables, f.Vars) {
+			continue
+		}
+		if !afterCursor(inst.ID, f.Cursor, f.Desc) {
+			continue
+		}
 		out = append(out, cloneInstance(inst))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sortByID(out, func(i *Instance) string { return i.ID }, f.Desc)
 	if f.Limit > 0 && len(out) > f.Limit {
 		out = out[:f.Limit]
 	}
@@ -186,10 +204,16 @@ func (m *Memory) ListTasks(f TaskFilter) ([]*Task, error) {
 	defer m.mu.RUnlock()
 	var out []*Task
 	for _, t := range m.tasks {
+		if f.TenantID != "" && t.TenantID != f.TenantID {
+			continue
+		}
 		if f.InstanceID != "" && t.InstanceID != f.InstanceID {
 			continue
 		}
 		if f.Assignee != "" && t.Assignee != f.Assignee {
+			continue
+		}
+		if f.Unassigned && t.Assignee != "" {
 			continue
 		}
 		if f.CandidateUser != "" && !containsStr(t.CandidateUsers, f.CandidateUser) {
@@ -204,9 +228,27 @@ func (m *Memory) ListTasks(f TaskFilter) ([]*Task, error) {
 		if f.DefinitionKey != "" && t.DefinitionKey != f.DefinitionKey {
 			continue
 		}
+		if f.ElementID != "" && t.ElementID != f.ElementID {
+			continue
+		}
+		if !inTimeWindow(t.CreatedAt, f.CreatedAfter, f.CreatedBefore) {
+			continue
+		}
+		if !f.DueBefore.IsZero() && (t.DueAt.IsZero() || t.DueAt.After(f.DueBefore)) {
+			continue
+		}
+		if len(f.Vars) > 0 {
+			inst := m.instances[t.InstanceID]
+			if inst == nil || !MatchVars(inst.Variables, f.Vars) {
+				continue
+			}
+		}
+		if !afterCursor(t.ID, f.Cursor, f.Desc) {
+			continue
+		}
 		out = append(out, cloneTask(t))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sortByID(out, func(t *Task) string { return t.ID }, f.Desc)
 	if f.Limit > 0 && len(out) > f.Limit {
 		out = out[:f.Limit]
 	}
