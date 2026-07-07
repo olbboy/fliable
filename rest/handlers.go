@@ -131,6 +131,16 @@ func (s *Server) handleStartInstance(w http.ResponseWriter, r *http.Request) {
 		s.error(w, http.StatusBadRequest, err)
 		return
 	}
+	// Ride the trace context into the instance so workers can continue it.
+	if tr := traceFrom(r.Context()); tr.Traceparent != "" {
+		if req.Variables == nil {
+			req.Variables = map[string]any{}
+		}
+		if _, set := req.Variables[traceparentVar]; !set {
+			req.Variables[traceparentVar] = tr.Traceparent
+		}
+	}
+
 	var inst *store.Instance
 	var err error
 	switch {

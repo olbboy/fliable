@@ -103,9 +103,22 @@ func publicPath(p string) bool {
 	return p == "/healthz" || p == "/openapi.json" || p == "/docs"
 }
 
-// ServeHTTP implements http.Handler: CORS, panic recovery, authentication
-// and tenant confinement, then routing (per-route RBAC lives in guard).
+// ServeHTTP implements http.Handler: trace context, CORS, panic recovery,
+// request logging, authentication and tenant confinement, then routing
+// (per-route RBAC lives in guard).
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	tr := ensureTrace(r)
+	w.Header().Set("X-Trace-Id", tr.TraceID)
+	r = r.WithContext(context.WithValue(r.Context(), traceKey{}, tr))
+	sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+	w = sw
+	begin := time.Now()
+	defer func() {
+		s.log.Info("request",
+			"method", r.Method, "path", r.URL.Path, "status", sw.status,
+			"dur", time.Since(begin).String(), "trace", tr.TraceID)
+	}()
+
 	if s.cors != nil {
 		if s.cors.apply(w, r) {
 			w.WriteHeader(http.StatusNoContent)
@@ -114,7 +127,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			s.log.Error("panic in handler", "path", r.URL.Path, "panic", rec)
+			s.log.Error("panic in handler", "path", r.URL.Path, "panic", rec, "trace", tr.TraceID)
 			s.error(w, http.StatusInternalServerError, fmt.Errorf("internal error"))
 		}
 	}()

@@ -182,6 +182,41 @@ func (m *Memory) ListInstances(f InstanceFilter) ([]*Instance, error) {
 	return out, nil
 }
 
+// PurgeInstance implements Store.
+func (m *Memory) PurgeInstance(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.instances, id)
+	delete(m.history, id)
+	delete(m.histSeq, id)
+	for tid, t := range m.tasks {
+		if t.InstanceID == id {
+			delete(m.tasks, tid)
+		}
+	}
+	for jid, j := range m.jobs {
+		if j.InstanceID == id {
+			delete(m.jobs, jid)
+		}
+	}
+	for eid, e := range m.externals {
+		if e.InstanceID == id {
+			delete(m.externals, eid)
+		}
+	}
+	for sid, s := range m.subs {
+		if s.InstanceID == id {
+			delete(m.subs, sid)
+		}
+	}
+	for iid, inc := range m.incidents {
+		if inc.InstanceID == id {
+			delete(m.incidents, iid)
+		}
+	}
+	return nil
+}
+
 // ---- tasks -----------------------------------------------------------------
 
 // PutTask implements Store.

@@ -90,6 +90,10 @@ type Store interface {
 	PutInstance(inst *Instance) error
 	GetInstance(id string) (*Instance, error)
 	ListInstances(f InstanceFilter) ([]*Instance, error)
+	// PurgeInstance removes an instance and every record tied to it
+	// (history, tasks, jobs, subscriptions, external tasks, incidents).
+	// Used by history/instance retention housekeeping.
+	PurgeInstance(id string) error
 
 	// User tasks.
 	PutTask(t *Task) error

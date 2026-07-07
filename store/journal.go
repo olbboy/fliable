@@ -185,6 +185,8 @@ func (j *Journal) apply(e journalEntry) error {
 		return j.mem.PutJob(&jb)
 	case "deljob":
 		return j.mem.DeleteJob(e.ID)
+	case "purge":
+		return j.mem.PurgeInstance(e.ID)
 	case "ext":
 		var t ExternalTask
 		if err := json.Unmarshal(e.D, &t); err != nil {
@@ -360,6 +362,14 @@ func (j *Journal) GetInstance(id string) (*Instance, error) { return j.mem.GetIn
 // ListInstances implements Store.
 func (j *Journal) ListInstances(f InstanceFilter) ([]*Instance, error) {
 	return j.mem.ListInstances(f)
+}
+
+// PurgeInstance implements Store.
+func (j *Journal) PurgeInstance(id string) error {
+	if err := j.mem.PurgeInstance(id); err != nil {
+		return err
+	}
+	return j.append("purge", id, nil)
 }
 
 // PutTask implements Store.

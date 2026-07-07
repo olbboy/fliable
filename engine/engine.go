@@ -130,6 +130,7 @@ type Engine struct {
 	locks        [64]sync.Mutex // striped per-instance locks
 	retryBackoff time.Duration
 	pollInterval time.Duration
+	housekeeping *HousekeepingPolicy
 
 	stop    chan struct{}
 	stopped chan struct{}
@@ -204,6 +205,9 @@ func (e *Engine) Start() {
 	e.stop = make(chan struct{})
 	e.stopped = make(chan struct{})
 	go e.schedulerLoop()
+	if e.housekeeping != nil {
+		go e.housekeepingLoop()
+	}
 }
 
 // reconcile repairs the small at-least-once windows a crash can leave
