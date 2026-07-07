@@ -1,0 +1,42 @@
+# Fliable leader + warm standby with journal replication.
+#
+#   docker compose up --build
+#   curl localhost:8080/healthz
+#
+# Failover drill: stop the leader, then promote the standby by running it
+# without --standby on the same volume:
+#   docker compose stop fliable
+#   docker compose run --rm -p 8080:8080 fliable-standby \
+#     serve --addr :8080 --data /data
+services:
+  fliable:
+    build: .
+    command:
+      - serve
+      - --addr=:8080
+      - --data=/data
+      - --replicate-to=http://fliable-standby:9090
+    environment:
+      FLIABLE_REPLICATION_SECRET: ${FLIABLE_REPLICATION_SECRET:-change-me}
+      # FLIABLE_MASTER_KEY: enables the encrypted secrets vault
+    ports:
+      - "8080:8080"
+    volumes:
+      - fliable-data:/data
+    depends_on:
+      - fliable-standby
+
+  fliable-standby:
+    build: .
+    command:
+      - serve
+      - --standby=:9090
+      - --data=/data
+    environment:
+      FLIABLE_REPLICATION_SECRET: ${FLIABLE_REPLICATION_SECRET:-change-me}
+    volumes:
+      - fliable-standby-data:/data
+
+volumes:
+  fliable-data:
+  fliable-standby-data:

@@ -55,11 +55,26 @@ Kubernetes packaging.
   payload-expression correlation and variable mapping onto messages or
   signals, idempotency via header or configured dedupe expression.
 
+### AI agent governance
+- Agent guard (`engine.WithAgentGuard`): invocation timeout backstop,
+  per-instance token budget circuit-breaker (charged to the instance,
+  persisted/replicated/purged with it), and a result review hook where
+  drift/policy detectors plug in. Violations emit `agent.rejected` and
+  fail through the standard retry → incident cycle — on both the
+  in-process and external-worker paths.
+- Runnable end-to-end demo: `go run ./examples/ai-agent` — agent task,
+  MCP-style tool call, human approval, conditional routing and the full
+  audit trail printed from history. Offline; no provider key needed.
+
 ### Packaging & SDK
-- Dockerfile (scratch image, ~8 MB static binary), Helm chart with
-  optional warm standby, plain Kubernetes manifests (`deploy/`).
+- Dockerfile (scratch image, ~8 MB static binary), docker-compose with
+  leader + warm standby, Helm chart with optional standby, plain
+  Kubernetes manifests (`deploy/`).
 - `@fliable/sdk` 1.2.0: migration, forms, webhooks, secrets and
   analytics APIs added to the typed client.
+- Mission tracking docs: `INVENTORY.md`, `BACKLOG.md` (gap analysis with
+  acceptance criteria), `PROGRESS.md` (phases + measured benchmarks),
+  `DECISIONS.md` (architecture decision log).
 
 ## [1.1.0] — 2026-07-07
 

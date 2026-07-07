@@ -172,15 +172,39 @@ model SDK lives in the core. You supply the intelligence two ways:
   external tasks) from a separate binary that calls Claude, GPT, or any
   MCP toolchain, then complete the job over REST.
 
-Every invocation is **governed by the event log**: `agent.invoked` and
-`agent.completed` history events capture the prompt, tool calls and token
-usage, so decisions are auditable and reproducible. A **human-in-the-loop**
-approval gate can park an agent's proposal as a user task and release it
-only when an `approved` variable is set. Tool descriptors are **MCP-native**,
-so the same agent works against any Model Context Protocol server.
+Every invocation is **governed by the event log**: `agent.invoked`,
+`agent.completed` and `agent.rejected` history events capture the prompt,
+tool calls, token usage and approval identity, so decisions are auditable
+and reproducible. A **human-in-the-loop** approval gate can park an
+agent's proposal as a user task and release it only when an `approved`
+variable is set. Tool descriptors are **MCP-native**, so the same agent
+works against any Model Context Protocol server.
+
+On top of the audit trail sits the **agent guard** — runtime governance:
 
 ```go
-eng := engine.New(st, engine.WithDefaultAgent(myInvoker)) // or leave agents to external workers
+eng := engine.New(st,
+    engine.WithDefaultAgent(myInvoker), // or leave agents to external workers
+    engine.WithAgentGuard(engine.AgentGuard{
+        InvokeTimeout:        30 * time.Second, // hung provider can never wedge a flow
+        MaxTokensPerInstance: 50_000,           // cost circuit-breaker per instance
+        Review: func(r engine.AgentReview) error { // drift / policy hook
+            return validate(r.Output)
+        },
+    }),
+)
+```
+
+Budget exhaustion and review rejections raise **incidents** through the
+same retry cycle as any failing task — agent failures are never silent
+and never special-cased.
+
+**Run the end-to-end demo** (offline, no model key needed):
+
+```bash
+go run ./examples/ai-agent
+# agent task -> MCP-style tool call -> human approval -> routed flow,
+# then the full decision trail printed from the event-sourced history
 ```
 
 ## Multi-tenancy, auth & security
@@ -254,6 +278,7 @@ One "lifecycle" is the complete journey — start event, script task with expres
 - [REST API reference](docs/rest-api.md) — plus live OpenAPI 3.1 at `/openapi.json` and `/docs`
 - [Roadmap alignment](docs/roadmap-alignment.md) — production, UI compatibility & AI integration mapped to capabilities
 - [TypeScript SDK](packages/sdk-ts/README.md) — headless client + React hooks for any UI framework
+- Project state: [INVENTORY.md](INVENTORY.md) · [BACKLOG.md](BACKLOG.md) · [PROGRESS.md](PROGRESS.md) (incl. measured benchmarks) · [DECISIONS.md](DECISIONS.md)
 
 ## Repository layout
 
