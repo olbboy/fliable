@@ -135,6 +135,13 @@ type Store interface {
 	GetIncident(id string) (*Incident, error)
 	ListIncidents(f IncidentFilter) ([]*Incident, error)
 
+	// Blobs: named payloads for the platform layers (forms, secrets,
+	// webhook channels). Kind namespaces keys.
+	PutBlob(b *Blob) error
+	GetBlob(kind, key string) (*Blob, error)
+	ListBlobs(kind string) ([]*Blob, error)
+	DeleteBlob(kind, key string) error
+
 	// History. AppendHistory assigns ev.Seq.
 	AppendHistory(ev *HistoryEvent) error
 	ListHistory(instanceID string, f HistoryFilter) ([]*HistoryEvent, error)

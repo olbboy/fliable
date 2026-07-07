@@ -122,6 +122,85 @@ func toF(v any) (float64, bool) {
 	return 0, false
 }
 
+// matchInstance reports whether an instance satisfies every set field of
+// the filter (cursor and limit are handled by the caller's pagination).
+func matchInstance(f InstanceFilter, inst *Instance) bool {
+	if f.TenantID != "" && inst.TenantID != f.TenantID {
+		return false
+	}
+	if f.DefinitionKey != "" && inst.DefinitionKey != f.DefinitionKey {
+		return false
+	}
+	if f.DefinitionID != "" && inst.DefinitionID != f.DefinitionID {
+		return false
+	}
+	if f.BusinessKey != "" && inst.BusinessKey != f.BusinessKey {
+		return false
+	}
+	if f.State != "" && inst.State != f.State {
+		return false
+	}
+	if f.ParentID != "" && inst.ParentID != f.ParentID {
+		return false
+	}
+	if !inTimeWindow(inst.StartedAt, f.StartedAfter, f.StartedBefore) {
+		return false
+	}
+	if (!f.EndedAfter.IsZero() || !f.EndedBefore.IsZero()) && !inTimeWindow(inst.EndedAt, f.EndedAfter, f.EndedBefore) {
+		return false
+	}
+	if len(f.Vars) > 0 && !MatchVars(inst.Variables, f.Vars) {
+		return false
+	}
+	return afterCursor(inst.ID, f.Cursor, f.Desc)
+}
+
+// matchTask reports whether a task satisfies every set field of the filter.
+// instVars are the task's instance variables, needed only when f.Vars is
+// set (pass nil otherwise); a nil map with Vars set never matches.
+func matchTask(f TaskFilter, t *Task, instVars func() map[string]any) bool {
+	if f.TenantID != "" && t.TenantID != f.TenantID {
+		return false
+	}
+	if f.InstanceID != "" && t.InstanceID != f.InstanceID {
+		return false
+	}
+	if f.Assignee != "" && t.Assignee != f.Assignee {
+		return false
+	}
+	if f.Unassigned && t.Assignee != "" {
+		return false
+	}
+	if f.CandidateUser != "" && !containsStr(t.CandidateUsers, f.CandidateUser) {
+		return false
+	}
+	if f.CandidateGroup != "" && !containsStr(t.CandidateGroups, f.CandidateGroup) {
+		return false
+	}
+	if f.State != "" && t.State != f.State {
+		return false
+	}
+	if f.DefinitionKey != "" && t.DefinitionKey != f.DefinitionKey {
+		return false
+	}
+	if f.ElementID != "" && t.ElementID != f.ElementID {
+		return false
+	}
+	if !inTimeWindow(t.CreatedAt, f.CreatedAfter, f.CreatedBefore) {
+		return false
+	}
+	if !f.DueBefore.IsZero() && (t.DueAt.IsZero() || t.DueAt.After(f.DueBefore)) {
+		return false
+	}
+	if len(f.Vars) > 0 {
+		vars := instVars()
+		if vars == nil || !MatchVars(vars, f.Vars) {
+			return false
+		}
+	}
+	return afterCursor(t.ID, f.Cursor, f.Desc)
+}
+
 // afterCursor reports whether id sorts after the cursor for the requested
 // direction. An empty cursor accepts everything (page one).
 func afterCursor(id, cursor string, desc bool) bool {

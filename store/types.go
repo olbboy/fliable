@@ -252,6 +252,18 @@ type AgentJob struct {
 	CreatedAt  time.Time       `json:"createdAt"`
 }
 
+// Blob is a small named payload persisted alongside engine records: form
+// definitions, encrypted secrets, webhook channel configs — anything the
+// platform layers above the engine need to survive a restart. Kind
+// namespaces the key space.
+type Blob struct {
+	Kind      string    `json:"kind"`
+	Key       string    `json:"key"`
+	TenantID  string    `json:"tenantId,omitempty"`
+	Data      []byte    `json:"data"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // SubscriptionKind classifies event subscriptions.
 type SubscriptionKind string
 

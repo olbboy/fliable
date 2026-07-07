@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -53,6 +54,7 @@ type snapshotFile struct {
 	AgentJobs   []*AgentJob                `json:"agentJobs"`
 	Subs        []*Subscription            `json:"subs"`
 	Incidents   []*Incident                `json:"incidents"`
+	Blobs       []*Blob                    `json:"blobs,omitempty"`
 	History     map[string][]*HistoryEvent `json:"history"`
 }
 
@@ -110,6 +112,9 @@ func (j *Journal) load() error {
 		}
 		for _, i := range snap.Incidents {
 			j.mem.incidents[i.ID] = i
+		}
+		for _, b := range snap.Blobs {
+			j.mem.blobs[blobKey(b.Kind, b.Key)] = b
 		}
 		for id, evs := range snap.History {
 			j.mem.history[id] = evs
@@ -217,6 +222,15 @@ func (j *Journal) apply(e journalEntry) error {
 			return err
 		}
 		return j.mem.PutIncident(&i)
+	case "blob":
+		var b Blob
+		if err := json.Unmarshal(e.D, &b); err != nil {
+			return err
+		}
+		return j.mem.PutBlob(&b)
+	case "delblob":
+		kind, key, _ := strings.Cut(e.ID, "\x00")
+		return j.mem.DeleteBlob(kind, key)
 	case "hist":
 		var ev HistoryEvent
 		if err := json.Unmarshal(e.D, &ev); err != nil {
@@ -294,6 +308,9 @@ func (j *Journal) compactLocked() error {
 	}
 	for _, i := range j.mem.incidents {
 		snap.Incidents = append(snap.Incidents, i)
+	}
+	for _, b := range j.mem.blobs {
+		snap.Blobs = append(snap.Blobs, b)
 	}
 	data, err := json.Marshal(&snap)
 	j.mem.mu.RUnlock()
@@ -532,6 +549,28 @@ func (j *Journal) GetIncident(id string) (*Incident, error) { return j.mem.GetIn
 // ListIncidents implements Store.
 func (j *Journal) ListIncidents(f IncidentFilter) ([]*Incident, error) {
 	return j.mem.ListIncidents(f)
+}
+
+// PutBlob implements Store.
+func (j *Journal) PutBlob(b *Blob) error {
+	if err := j.mem.PutBlob(b); err != nil {
+		return err
+	}
+	return j.append("blob", "", b)
+}
+
+// GetBlob implements Store.
+func (j *Journal) GetBlob(kind, key string) (*Blob, error) { return j.mem.GetBlob(kind, key) }
+
+// ListBlobs implements Store.
+func (j *Journal) ListBlobs(kind string) ([]*Blob, error) { return j.mem.ListBlobs(kind) }
+
+// DeleteBlob implements Store.
+func (j *Journal) DeleteBlob(kind, key string) error {
+	if err := j.mem.DeleteBlob(kind, key); err != nil {
+		return err
+	}
+	return j.append("delblob", kind+"\x00"+key, nil)
 }
 
 // AppendHistory implements Store.

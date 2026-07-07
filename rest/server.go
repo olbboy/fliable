@@ -20,6 +20,7 @@ import (
 	"github.com/olbboy/fliable/dmn"
 	"github.com/olbboy/fliable/engine"
 	"github.com/olbboy/fliable/store"
+	"github.com/olbboy/fliable/vault"
 )
 
 // Option configures the server.
@@ -62,6 +63,7 @@ func WithDecisions(r *dmn.Registry) Option {
 type Server struct {
 	e         *engine.Engine
 	decisions *dmn.Registry
+	vault     *vault.Vault
 	mux       *http.ServeMux
 	log       *slog.Logger
 
@@ -221,6 +223,7 @@ func (s *Server) routes() {
 	s.route("GET /v1/decisions", RoleViewer, s.handleListDecisions)
 
 	s.registerAgentRoutes()
+	s.registerVaultRoutes()
 }
 
 // ---- plumbing --------------------------------------------------------------

@@ -51,6 +51,24 @@ type Context struct {
 	ElementID   string
 	ElementName string
 	Variables   map[string]any
+
+	secrets SecretSource
+}
+
+// Secret resolves a named secret from the engine's configured secret
+// source (see WithSecrets). Secrets never pass through process variables,
+// expressions or history, so they cannot leak into the audit trail.
+func (c Context) Secret(name string) (string, error) {
+	if c.secrets == nil {
+		return "", errors.New("engine: no secret source configured (WithSecrets)")
+	}
+	return c.secrets.Secret(name)
+}
+
+// SecretSource resolves named secrets for service handlers. vault.Vault
+// implements it; so can any external secret manager adapter.
+type SecretSource interface {
+	Secret(name string) (string, error)
 }
 
 // BPMNError is a business error thrown by handlers and caught by error
@@ -104,6 +122,12 @@ func WithDefaultAgent(inv AgentInvoker) Option {
 	return func(e *Engine) { e.defaultAgent = inv }
 }
 
+// WithSecrets plugs a secret source (e.g. *vault.Vault) into service task
+// contexts.
+func WithSecrets(s SecretSource) Option {
+	return func(e *Engine) { e.secrets = s }
+}
+
 // WithRetryBackoff sets the base backoff for service task retries
 // (attempt n waits base * 2^n). Default 5s.
 func WithRetryBackoff(d time.Duration) Option {
@@ -131,6 +155,7 @@ type Engine struct {
 	agents       map[string]AgentInvoker
 	amu          sync.RWMutex
 	defaultAgent AgentInvoker
+	secrets      SecretSource
 
 	listeners []func(*store.HistoryEvent)
 	lmu       sync.RWMutex

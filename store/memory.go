@@ -21,6 +21,7 @@ type Memory struct {
 	agentJobs   map[string]*AgentJob
 	subs        map[string]*Subscription
 	incidents   map[string]*Incident
+	blobs       map[string]*Blob // key: kind + "\x00" + key
 	history     map[string][]*HistoryEvent
 	histSeq     map[string]int64
 }
@@ -36,6 +37,7 @@ func NewMemory() *Memory {
 		agentJobs:   map[string]*AgentJob{},
 		subs:        map[string]*Subscription{},
 		incidents:   map[string]*Incident{},
+		blobs:       map[string]*Blob{},
 		history:     map[string][]*HistoryEvent{},
 		histSeq:     map[string]int64{},
 	}
@@ -145,34 +147,7 @@ func (m *Memory) ListInstances(f InstanceFilter) ([]*Instance, error) {
 	defer m.mu.RUnlock()
 	var out []*Instance
 	for _, inst := range m.instances {
-		if f.TenantID != "" && inst.TenantID != f.TenantID {
-			continue
-		}
-		if f.DefinitionKey != "" && inst.DefinitionKey != f.DefinitionKey {
-			continue
-		}
-		if f.DefinitionID != "" && inst.DefinitionID != f.DefinitionID {
-			continue
-		}
-		if f.BusinessKey != "" && inst.BusinessKey != f.BusinessKey {
-			continue
-		}
-		if f.State != "" && inst.State != f.State {
-			continue
-		}
-		if f.ParentID != "" && inst.ParentID != f.ParentID {
-			continue
-		}
-		if !inTimeWindow(inst.StartedAt, f.StartedAfter, f.StartedBefore) {
-			continue
-		}
-		if (!f.EndedAfter.IsZero() || !f.EndedBefore.IsZero()) && !inTimeWindow(inst.EndedAt, f.EndedAfter, f.EndedBefore) {
-			continue
-		}
-		if len(f.Vars) > 0 && !MatchVars(inst.Variables, f.Vars) {
-			continue
-		}
-		if !afterCursor(inst.ID, f.Cursor, f.Desc) {
+		if !matchInstance(f, inst) {
 			continue
 		}
 		out = append(out, cloneInstance(inst))
@@ -251,46 +226,12 @@ func (m *Memory) ListTasks(f TaskFilter) ([]*Task, error) {
 	defer m.mu.RUnlock()
 	var out []*Task
 	for _, t := range m.tasks {
-		if f.TenantID != "" && t.TenantID != f.TenantID {
-			continue
-		}
-		if f.InstanceID != "" && t.InstanceID != f.InstanceID {
-			continue
-		}
-		if f.Assignee != "" && t.Assignee != f.Assignee {
-			continue
-		}
-		if f.Unassigned && t.Assignee != "" {
-			continue
-		}
-		if f.CandidateUser != "" && !containsStr(t.CandidateUsers, f.CandidateUser) {
-			continue
-		}
-		if f.CandidateGroup != "" && !containsStr(t.CandidateGroups, f.CandidateGroup) {
-			continue
-		}
-		if f.State != "" && t.State != f.State {
-			continue
-		}
-		if f.DefinitionKey != "" && t.DefinitionKey != f.DefinitionKey {
-			continue
-		}
-		if f.ElementID != "" && t.ElementID != f.ElementID {
-			continue
-		}
-		if !inTimeWindow(t.CreatedAt, f.CreatedAfter, f.CreatedBefore) {
-			continue
-		}
-		if !f.DueBefore.IsZero() && (t.DueAt.IsZero() || t.DueAt.After(f.DueBefore)) {
-			continue
-		}
-		if len(f.Vars) > 0 {
-			inst := m.instances[t.InstanceID]
-			if inst == nil || !MatchVars(inst.Variables, f.Vars) {
-				continue
+		if !matchTask(f, t, func() map[string]any {
+			if inst := m.instances[t.InstanceID]; inst != nil {
+				return inst.Variables
 			}
-		}
-		if !afterCursor(t.ID, f.Cursor, f.Desc) {
+			return nil
+		}) {
 			continue
 		}
 		out = append(out, cloneTask(t))
@@ -588,6 +529,62 @@ func (m *Memory) ListIncidents(f IncidentFilter) ([]*Incident, error) {
 		out = out[:f.Limit]
 	}
 	return out, nil
+}
+
+// ---- blobs ----------------------------------------------------------------------
+
+func blobKey(kind, key string) string { return kind + "\x00" + key }
+
+// PutBlob implements Store.
+func (m *Memory) PutBlob(b *Blob) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.blobs[blobKey(b.Kind, b.Key)] = cloneBlob(b)
+	return nil
+}
+
+// GetBlob implements Store.
+func (m *Memory) GetBlob(kind, key string) (*Blob, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	b, ok := m.blobs[blobKey(kind, key)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return cloneBlob(b), nil
+}
+
+// ListBlobs implements Store.
+func (m *Memory) ListBlobs(kind string) ([]*Blob, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*Blob
+	for _, b := range m.blobs {
+		if kind == "" || b.Kind == kind {
+			out = append(out, cloneBlob(b))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out, nil
+}
+
+// DeleteBlob implements Store.
+func (m *Memory) DeleteBlob(kind, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.blobs, blobKey(kind, key))
+	return nil
+}
+
+func cloneBlob(b *Blob) *Blob {
+	cp := *b
+	cp.Data = append([]byte(nil), b.Data...)
+	return &cp
 }
 
 // ---- history --------------------------------------------------------------------

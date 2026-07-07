@@ -209,6 +209,7 @@ func (rt *runtime) serviceTask(tok *store.Token, el *bpmn.Element) error {
 			ElementID:   el.ID,
 			ElementName: el.Name,
 			Variables:   rt.env(tok),
+			secrets:     rt.e.secrets,
 		})
 		if err != nil {
 			rt.handleActivityFailure(tok, el, err)
