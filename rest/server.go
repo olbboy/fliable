@@ -19,6 +19,7 @@ import (
 
 	"github.com/olbboy/fliable/dmn"
 	"github.com/olbboy/fliable/engine"
+	"github.com/olbboy/fliable/form"
 	"github.com/olbboy/fliable/store"
 	"github.com/olbboy/fliable/vault"
 )
@@ -64,6 +65,7 @@ type Server struct {
 	e         *engine.Engine
 	decisions *dmn.Registry
 	vault     *vault.Vault
+	forms     *form.Registry
 	mux       *http.ServeMux
 	log       *slog.Logger
 
@@ -74,6 +76,7 @@ type Server struct {
 	sseMu   sync.Mutex
 	sseSubs map[chan *store.HistoryEvent]struct{}
 	started time.Time
+	dedupe  *dedupeCache
 }
 
 // New builds the HTTP handler for an engine.
@@ -84,6 +87,7 @@ func New(e *engine.Engine, opts ...Option) *Server {
 		log:     slog.Default(),
 		sseSubs: map[chan *store.HistoryEvent]struct{}{},
 		started: time.Now(),
+		dedupe:  newDedupeCache(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -103,6 +107,22 @@ func (s *Server) authRequired() bool { return s.auth != nil }
 // publicPath endpoints skip authentication entirely.
 func publicPath(p string) bool {
 	return p == "/healthz" || p == "/openapi.json" || p == "/docs"
+}
+
+// publicRequest additionally admits webhook event ingestion, which
+// authenticates with the channel's own secret instead of a platform
+// credential (external systems shouldn't hold API keys). Channel
+// management (GET/PUT/DELETE) stays behind normal auth.
+func publicRequest(r *http.Request) bool {
+	if publicPath(r.URL.Path) {
+		return true
+	}
+	if r.Method == http.MethodPost {
+		if name, ok := strings.CutPrefix(r.URL.Path, "/v1/webhooks/"); ok && name != "" && !strings.Contains(name, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 // ServeHTTP implements http.Handler: trace context, CORS, panic recovery,
@@ -134,7 +154,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	if s.authRequired() && !publicPath(r.URL.Path) {
+	if s.authRequired() && !publicRequest(r) {
 		p, err := s.auth.Authenticate(r)
 		if err != nil {
 			s.error(w, http.StatusUnauthorized, err)
@@ -224,6 +244,9 @@ func (s *Server) routes() {
 
 	s.registerAgentRoutes()
 	s.registerVaultRoutes()
+	s.registerFormRoutes()
+	s.registerWebhookRoutes()
+	s.registerAnalyticsRoutes()
 }
 
 // ---- plumbing --------------------------------------------------------------
@@ -249,7 +272,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		s.error(w, http.StatusNotFound, err)
-	case strings.Contains(err.Error(), "bpmn:"), strings.Contains(err.Error(), "dmn:"), strings.Contains(err.Error(), "expr:"):
+	case strings.Contains(err.Error(), "bpmn:"), strings.Contains(err.Error(), "dmn:"),
+		strings.Contains(err.Error(), "expr:"), strings.Contains(err.Error(), "form:"):
 		s.error(w, http.StatusUnprocessableEntity, err)
 	case strings.Contains(err.Error(), "is completed"), strings.Contains(err.Error(), "is terminated"),
 		strings.Contains(err.Error(), "already"), strings.Contains(err.Error(), "locked by"),

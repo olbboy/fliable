@@ -71,6 +71,13 @@ type SecretSource interface {
 	Secret(name string) (string, error)
 }
 
+// FormValidator checks a user-task submission against the form referenced
+// by the task's form key, applying defaults in place. form.Registry
+// implements it.
+type FormValidator interface {
+	Validate(formKey string, vars map[string]any) error
+}
+
 // BPMNError is a business error thrown by handlers and caught by error
 // boundary events or event sub-processes.
 type BPMNError struct {
@@ -128,6 +135,12 @@ func WithSecrets(s SecretSource) Option {
 	return func(e *Engine) { e.secrets = s }
 }
 
+// WithFormValidator validates user-task completions whose task carries a
+// form key (e.g. *form.Registry).
+func WithFormValidator(v FormValidator) Option {
+	return func(e *Engine) { e.forms = v }
+}
+
 // WithRetryBackoff sets the base backoff for service task retries
 // (attempt n waits base * 2^n). Default 5s.
 func WithRetryBackoff(d time.Duration) Option {
@@ -156,6 +169,7 @@ type Engine struct {
 	amu          sync.RWMutex
 	defaultAgent AgentInvoker
 	secrets      SecretSource
+	forms        FormValidator
 
 	listeners []func(*store.HistoryEvent)
 	lmu       sync.RWMutex
@@ -751,6 +765,11 @@ func (e *Engine) CompleteTask(taskID string, vars map[string]any, user string) e
 	}
 	if t.State != store.TaskCreated {
 		return fmt.Errorf("engine: task %s is %s", taskID, t.State)
+	}
+	if t.FormKey != "" && e.forms != nil {
+		if err := e.forms.Validate(t.FormKey, vars); err != nil {
+			return err
+		}
 	}
 	return e.resume(t.InstanceID, func(rt *runtime) (bool, error) {
 		tok := rt.inst.Tokens[t.TokenID]
