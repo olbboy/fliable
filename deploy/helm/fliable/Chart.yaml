@@ -1,0 +1,7 @@
+apiVersion: v2
+name: fliable
+description: Compact, highly efficient workflow & BPM platform — BPMN 2.0 + DMN in a single ~10 MB binary.
+type: application
+version: 1.2.0
+appVersion: "1.2.0"
+home: https://github.com/olbboy/fliable

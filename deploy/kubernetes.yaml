@@ -1,0 +1,116 @@
+# Plain-manifest deployment of Fliable: a single-replica StatefulSet with
+# a persistent journal volume, plus an optional warm standby that follows
+# the leader via journal replication (promote it by flipping its args).
+#
+#   kubectl apply -f deploy/kubernetes.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: fliable
+  labels: {app: fliable}
+spec:
+  selector: {app: fliable, role: leader}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fliable-standby
+  labels: {app: fliable}
+spec:
+  selector: {app: fliable, role: standby}
+  ports:
+    - name: replication
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fliable
+spec:
+  serviceName: fliable
+  replicas: 1
+  selector:
+    matchLabels: {app: fliable, role: leader}
+  template:
+    metadata:
+      labels: {app: fliable, role: leader}
+    spec:
+      containers:
+        - name: fliable
+          image: fliable:latest
+          args:
+            - serve
+            - --addr=:8080
+            - --data=/data
+            - --replicate-to=http://fliable-standby:9090
+          env:
+            - name: FLIABLE_REPLICATION_SECRET
+              valueFrom:
+                secretKeyRef: {name: fliable-secrets, key: replication, optional: true}
+            - name: FLIABLE_MASTER_KEY
+              valueFrom:
+                secretKeyRef: {name: fliable-secrets, key: masterKey, optional: true}
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 1Gi}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fliable-standby
+spec:
+  serviceName: fliable-standby
+  replicas: 1
+  selector:
+    matchLabels: {app: fliable, role: standby}
+  template:
+    metadata:
+      labels: {app: fliable, role: standby}
+    spec:
+      containers:
+        - name: fliable
+          image: fliable:latest
+          args:
+            - serve
+            - --standby=:9090
+            - --data=/data
+          env:
+            - name: FLIABLE_REPLICATION_SECRET
+              valueFrom:
+                secretKeyRef: {name: fliable-secrets, key: replication, optional: true}
+          ports:
+            - containerPort: 9090
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 1Gi}

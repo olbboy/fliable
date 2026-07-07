@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "fliable.fullname" . }}
+  labels: {{- include "fliable.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "fliable.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "fliable.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      role: leader
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "fliable.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        role: leader
+    spec:
+      containers:
+        - name: fliable
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --addr=:8080
+            {{- if .Values.persistence.enabled }}
+            - --data=/data
+            {{- end }}
+            {{- if .Values.apiKey }}
+            - --api-key={{ .Values.apiKey }}
+            {{- end }}
+            {{- if .Values.otelEndpoint }}
+            - --otel={{ .Values.otelEndpoint }}
+            {{- end }}
+            {{- if .Values.standby.enabled }}
+            - --replicate-to=http://{{ include "fliable.fullname" . }}-standby:9090
+            {{- end }}
+            {{- range .Values.extraArgs }}
+            - {{ . }}
+            {{- end }}
+          {{- if .Values.existingSecret }}
+          env:
+            - name: FLIABLE_MASTER_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.existingSecret }}, key: masterKey, optional: true}
+            - name: FLIABLE_REPLICATION_SECRET
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.existingSecret }}, key: replication, optional: true}
+          {{- end }}
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

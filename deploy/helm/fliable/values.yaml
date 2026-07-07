@@ -1,0 +1,37 @@
+image:
+  repository: fliable
+  tag: "1.2.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+
+# Require X-Api-Key on the API (set a value to enable).
+apiKey: ""
+
+# Existing Secret with optional keys: masterKey (secrets vault),
+# replication (standby shared secret).
+existingSecret: ""
+
+# OTLP/HTTP endpoint for trace export, e.g. http://otel-collector:4318.
+otelEndpoint: ""
+
+# Warm standby receiving journal replication from the leader.
+standby:
+  enabled: false
+  size: 1Gi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    memory: 512Mi
+
+extraArgs: []

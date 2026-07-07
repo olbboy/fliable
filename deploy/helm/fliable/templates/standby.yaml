@@ -1,0 +1,61 @@
+{{- if .Values.standby.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fliable.fullname" . }}-standby
+  labels: {{- include "fliable.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "fliable.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    role: standby
+  ports:
+    - name: replication
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "fliable.fullname" . }}-standby
+  labels: {{- include "fliable.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "fliable.fullname" . }}-standby
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "fliable.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      role: standby
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "fliable.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        role: standby
+    spec:
+      containers:
+        - name: fliable
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [serve, --standby=:9090, --data=/data]
+          {{- if .Values.existingSecret }}
+          env:
+            - name: FLIABLE_REPLICATION_SECRET
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.existingSecret }}, key: replication, optional: true}
+          {{- end }}
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.standby.size }}
+{{- end }}

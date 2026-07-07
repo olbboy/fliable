@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fliable.fullname" . }}
+  labels: {{- include "fliable.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app.kubernetes.io/name: {{ include "fliable.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    role: leader
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: 8080
