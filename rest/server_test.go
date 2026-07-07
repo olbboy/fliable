@@ -31,9 +31,79 @@ const approvalXML = `<?xml version="1.0"?>
 </definitions>`
 
 type client struct {
-	t   *testing.T
-	srv *httptest.Server
-	key string
+	t      *testing.T
+	srv    *httptest.Server
+	key    string
+	bearer string
+}
+
+// newTestServer starts an httptest server for a configured Server and
+// registers cleanup.
+func newTestServer(t *testing.T, s *Server) *httptest.Server {
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// auth sets credentials on a request from the client's configured key or
+// bearer token.
+func (c *client) auth(req *http.Request) {
+	if c.key != "" {
+		req.Header.Set("X-Api-Key", c.key)
+	}
+	if c.bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+c.bearer)
+	}
+}
+
+// doAuth issues a bodyless request and asserts the status.
+func (c *client) doAuth(method, path string, want int) {
+	c.t.Helper()
+	req, _ := http.NewRequest(method, c.srv.URL+path, nil)
+	c.auth(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != want {
+		c.t.Fatalf("%s %s = %d, want %d", method, path, resp.StatusCode, want)
+	}
+}
+
+// doAuthBody issues a request with a raw body and asserts the status.
+func (c *client) doAuthBody(method, path, body string, want int) {
+	c.t.Helper()
+	req, _ := http.NewRequest(method, c.srv.URL+path, strings.NewReader(body))
+	c.auth(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != want {
+		c.t.Fatalf("%s %s = %d, want %d", method, path, resp.StatusCode, want)
+	}
+}
+
+// doAuthPage issues a GET and returns the page envelope items.
+func (c *client) doAuthPage(method, path string, want int) []map[string]any {
+	c.t.Helper()
+	req, _ := http.NewRequest(method, c.srv.URL+path, nil)
+	c.auth(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != want {
+		c.t.Fatalf("%s %s = %d, want %d", method, path, resp.StatusCode, want)
+	}
+	var env struct {
+		Items []map[string]any `json:"items"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&env)
+	return env.Items
 }
 
 func newClient(t *testing.T, opts ...Option) *client {

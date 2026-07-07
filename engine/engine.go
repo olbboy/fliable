@@ -311,10 +311,17 @@ func (e *Engine) lockFor(instanceID string) *sync.Mutex {
 
 // ---- deployment --------------------------------------------------------------
 
-// Deploy parses, validates and stores a BPMN definition. Redeploying the
-// same process key bumps the version; in-flight instances continue on
-// their original version.
+// Deploy parses, validates and stores a BPMN definition in the default
+// (untenanted) space. Redeploying the same process key bumps the version;
+// in-flight instances continue on their original version.
 func (e *Engine) Deploy(xml []byte, name string) (*store.Definition, error) {
+	return e.DeployTenant("", xml, name)
+}
+
+// DeployTenant deploys a definition scoped to a tenant. Versions are
+// tracked per (tenant, process key), so tenants deploy the same process
+// independently.
+func (e *Engine) DeployTenant(tenantID string, xml []byte, name string) (*store.Definition, error) {
 	doc, err := bpmn.Parse(xml)
 	if err != nil {
 		return nil, err
@@ -324,7 +331,7 @@ func (e *Engine) Deploy(xml []byte, name string) (*store.Definition, error) {
 		return nil, errors.New("engine: no executable process in document")
 	}
 	version := 1
-	if prev, err := e.st.LatestDefinition(proc.ID); err == nil {
+	if prev, err := e.st.LatestDefinitionForTenant(tenantID, proc.ID); err == nil {
 		version = prev.Version + 1
 	}
 	if name == "" {
@@ -332,6 +339,7 @@ func (e *Engine) Deploy(xml []byte, name string) (*store.Definition, error) {
 	}
 	def := &store.Definition{
 		ID:         e.newID("def"),
+		TenantID:   tenantID,
 		Key:        proc.ID,
 		Version:    version,
 		Name:       name,
@@ -361,7 +369,7 @@ func (e *Engine) registerStartTriggers(def *store.Definition, proc *bpmn.Process
 		return err
 	}
 	for _, s := range subs {
-		if s.DefinitionKey == def.Key {
+		if s.DefinitionKey == def.Key && s.TenantID == def.TenantID {
 			if err := e.st.DeleteSubscription(s.ID); err != nil {
 				return err
 			}
@@ -372,7 +380,7 @@ func (e *Engine) registerStartTriggers(def *store.Definition, proc *bpmn.Process
 		return err
 	}
 	for _, j := range jobs {
-		if j.DefinitionKey == def.Key && j.InstanceID == "" {
+		if j.DefinitionKey == def.Key && j.InstanceID == "" && j.TenantID == def.TenantID {
 			if err := e.st.DeleteJob(j.ID); err != nil {
 				return err
 			}
@@ -387,6 +395,7 @@ func (e *Engine) registerStartTriggers(def *store.Definition, proc *bpmn.Process
 		case bpmn.KindMessage:
 			sub := &store.Subscription{
 				ID:            e.newID("sub"),
+				TenantID:      def.TenantID,
 				Kind:          store.SubMessage,
 				Name:          se.Event.Message,
 				IsStart:       true,
@@ -400,6 +409,7 @@ func (e *Engine) registerStartTriggers(def *store.Definition, proc *bpmn.Process
 		case bpmn.KindSignal:
 			sub := &store.Subscription{
 				ID:            e.newID("sub"),
+				TenantID:      def.TenantID,
 				Kind:          store.SubSignal,
 				Name:          se.Event.Signal,
 				IsStart:       true,
@@ -417,6 +427,7 @@ func (e *Engine) registerStartTriggers(def *store.Definition, proc *bpmn.Process
 			}
 			job := &store.Job{
 				ID:            e.newID("job"),
+				TenantID:      def.TenantID,
 				Kind:          store.JobTimer,
 				DefinitionKey: def.Key,
 				ElementID:     se.ID,
@@ -454,11 +465,18 @@ func (e *Engine) definition(id string) (*parsedDef, error) {
 
 // ---- instance lifecycle --------------------------------------------------------
 
-// StartInstance starts an instance of the latest version of key.
+// StartInstance starts an instance of the latest version of key in the
+// default (untenanted) space.
 func (e *Engine) StartInstance(key, businessKey string, vars map[string]any) (*store.Instance, error) {
-	def, err := e.st.LatestDefinition(key)
+	return e.StartInstanceTenant("", key, businessKey, vars)
+}
+
+// StartInstanceTenant starts an instance of the latest version of key
+// within a tenant.
+func (e *Engine) StartInstanceTenant(tenantID, key, businessKey string, vars map[string]any) (*store.Instance, error) {
+	def, err := e.st.LatestDefinitionForTenant(tenantID, key)
 	if err != nil {
-		return nil, fmt.Errorf("engine: unknown process %q: %w", key, err)
+		return nil, fmt.Errorf("engine: unknown process %q (tenant %q): %w", key, tenantID, err)
 	}
 	return e.StartInstanceByDefinition(def.ID, businessKey, vars)
 }
@@ -507,6 +525,7 @@ func (e *Engine) startInstance(defID, presetID, businessKey string, vars map[str
 	}
 	inst := &store.Instance{
 		ID:            id,
+		TenantID:      pd.def.TenantID,
 		DefinitionID:  pd.def.ID,
 		DefinitionKey: pd.def.Key,
 		BusinessKey:   businessKey,
@@ -590,6 +609,39 @@ func (e *Engine) afterRun(rt *runtime) {
 	for _, c := range rt.continuations {
 		c()
 	}
+}
+
+// SuspendInstance pauses a running instance: tokens stop advancing and any
+// drained work is deferred until ResumeInstance. Timer firings and worker
+// completions are recorded but not acted on until resume.
+func (e *Engine) SuspendInstance(id string) error {
+	mu := e.lockFor(id)
+	mu.Lock()
+	defer mu.Unlock()
+	inst, err := e.st.GetInstance(id)
+	if err != nil {
+		return err
+	}
+	if inst.State != store.InstanceActive {
+		return fmt.Errorf("engine: instance %s is %s", id, inst.State)
+	}
+	if inst.Suspended {
+		return nil
+	}
+	inst.Suspended = true
+	return e.st.PutInstance(inst)
+}
+
+// ResumeInstance lifts a suspension and advances any work that accumulated
+// while the instance was paused.
+func (e *Engine) ResumeInstance(id string) error {
+	return e.resume(id, func(rt *runtime) (bool, error) {
+		if !rt.inst.Suspended {
+			return false, nil
+		}
+		rt.inst.Suspended = false
+		return true, nil
+	})
 }
 
 // CancelInstance terminates a running instance and cancels all its wait
@@ -727,7 +779,7 @@ func (e *Engine) CorrelateMessage(name, correlationKey string, vars map[string]a
 			if !sub.IsStart {
 				continue
 			}
-			def, err := e.st.LatestDefinition(sub.DefinitionKey)
+			def, err := e.st.LatestDefinitionForTenant(sub.TenantID, sub.DefinitionKey)
 			if err != nil {
 				continue
 			}
@@ -753,7 +805,7 @@ func (e *Engine) BroadcastSignal(name string, vars map[string]any) (int, error) 
 	count := 0
 	for _, sub := range subs {
 		if sub.IsStart {
-			def, err := e.st.LatestDefinition(sub.DefinitionKey)
+			def, err := e.st.LatestDefinitionForTenant(sub.TenantID, sub.DefinitionKey)
 			if err != nil {
 				continue
 			}

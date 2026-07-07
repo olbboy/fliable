@@ -336,6 +336,11 @@ func (j *Journal) LatestDefinition(key string) (*Definition, error) {
 	return j.mem.LatestDefinition(key)
 }
 
+// LatestDefinitionForTenant implements Store.
+func (j *Journal) LatestDefinitionForTenant(tenantID, key string) (*Definition, error) {
+	return j.mem.LatestDefinitionForTenant(tenantID, key)
+}
+
 // ListDefinitions implements Store.
 func (j *Journal) ListDefinitions(latestOnly bool) ([]*Definition, error) {
 	return j.mem.ListDefinitions(latestOnly)

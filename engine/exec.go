@@ -27,8 +27,12 @@ type runtime struct {
 }
 
 // drain advances every active token until the instance is quiescent
-// (all tokens parked on wait states) or finished.
+// (all tokens parked on wait states) or finished. A suspended instance
+// never advances: mutations persist but tokens stay put until resumed.
 func (rt *runtime) drain() error {
+	if rt.inst.Suspended {
+		return nil
+	}
 	for {
 		tok := rt.nextActive()
 		if tok == nil {

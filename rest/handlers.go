@@ -68,7 +68,7 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		s.error(w, http.StatusBadRequest, errors.New("request body must be BPMN XML"))
 		return
 	}
-	def, err := s.e.Deploy(xml, r.URL.Query().Get("name"))
+	def, err := s.e.DeployTenant(tenantOf(r), xml, r.URL.Query().Get("name"))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -137,7 +137,7 @@ func (s *Server) handleStartInstance(w http.ResponseWriter, r *http.Request) {
 	case req.DefinitionID != "":
 		inst, err = s.e.StartInstanceByDefinition(req.DefinitionID, req.BusinessKey, req.Variables)
 	case req.DefinitionKey != "":
-		inst, err = s.e.StartInstance(req.DefinitionKey, req.BusinessKey, req.Variables)
+		inst, err = s.e.StartInstanceTenant(tenantOf(r), req.DefinitionKey, req.BusinessKey, req.Variables)
 	default:
 		s.error(w, http.StatusBadRequest, errors.New("definitionKey or definitionId required"))
 		return

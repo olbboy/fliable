@@ -45,7 +45,7 @@ func (e *Engine) executeJob(job *store.Job) {
 
 	// Timer-start jobs create a fresh instance.
 	if job.InstanceID == "" && job.DefinitionKey != "" {
-		def, err := e.st.LatestDefinition(job.DefinitionKey)
+		def, err := e.st.LatestDefinitionForTenant(job.TenantID, job.DefinitionKey)
 		if err != nil {
 			e.log.Error("timer start: definition gone", "key", job.DefinitionKey)
 			return

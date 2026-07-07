@@ -81,6 +81,9 @@ type Store interface {
 	PutDefinition(d *Definition) error
 	GetDefinition(id string) (*Definition, error)
 	LatestDefinition(key string) (*Definition, error)
+	// LatestDefinitionForTenant returns the newest version of key within a
+	// tenant; tenantID "" is the default (untenanted) space.
+	LatestDefinitionForTenant(tenantID, key string) (*Definition, error)
 	ListDefinitions(latestOnly bool) ([]*Definition, error)
 
 	// Instances.

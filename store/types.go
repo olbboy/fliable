@@ -161,6 +161,7 @@ const (
 // continuation, service retry).
 type Job struct {
 	ID         string  `json:"id"`
+	TenantID   string  `json:"tenantId,omitempty"`
 	Kind       JobKind `json:"kind"`
 	InstanceID string  `json:"instanceId"`
 	// DefinitionKey is set instead of InstanceID for timer-start jobs that
@@ -218,6 +219,7 @@ const (
 // subscriptions (IsStart) create new instances; the rest resume tokens.
 type Subscription struct {
 	ID             string           `json:"id"`
+	TenantID       string           `json:"tenantId,omitempty"`
 	Kind           SubscriptionKind `json:"kind"`
 	Name           string           `json:"name"`
 	CorrelationKey string           `json:"correlationKey,omitempty"`

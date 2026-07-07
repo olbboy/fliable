@@ -65,11 +65,16 @@ func (m *Memory) GetDefinition(id string) (*Definition, error) {
 
 // LatestDefinition implements Store.
 func (m *Memory) LatestDefinition(key string) (*Definition, error) {
+	return m.LatestDefinitionForTenant("", key)
+}
+
+// LatestDefinitionForTenant implements Store.
+func (m *Memory) LatestDefinitionForTenant(tenantID, key string) (*Definition, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var best *Definition
 	for _, d := range m.definitions {
-		if d.Key == key && (best == nil || d.Version > best.Version) {
+		if d.Key == key && d.TenantID == tenantID && (best == nil || d.Version > best.Version) {
 			best = d
 		}
 	}

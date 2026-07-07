@@ -83,6 +83,7 @@ func (rt *runtime) userTask(tok *store.Token, el *bpmn.Element) error {
 	}
 	task := &store.Task{
 		ID:            rt.e.newID("task"),
+		TenantID:      rt.inst.TenantID,
 		InstanceID:    rt.inst.ID,
 		TokenID:       tok.ID,
 		ElementID:     el.ID,
@@ -341,7 +342,8 @@ func (rt *runtime) enterSubProcess(tok *store.Token, el *bpmn.Element) error {
 }
 
 func (rt *runtime) callActivity(tok *store.Token, el *bpmn.Element) error {
-	def, err := rt.e.st.LatestDefinition(el.CalledElement)
+	// The child runs in the same tenant as its parent.
+	def, err := rt.e.st.LatestDefinitionForTenant(rt.inst.TenantID, el.CalledElement)
 	if err != nil {
 		rt.raiseIncident(tok, "", fmt.Sprintf("call activity %s: unknown process %q", el.ID, el.CalledElement))
 		return nil
