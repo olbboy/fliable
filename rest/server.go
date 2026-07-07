@@ -217,6 +217,7 @@ func (s *Server) routes() {
 	s.route("PUT /v1/instances/{id}/variables", RoleOperator, s.handleSetVariables)
 	s.route("POST /v1/instances/{id}/suspend", RoleOperator, s.handleSuspendInstance)
 	s.route("POST /v1/instances/{id}/resume", RoleOperator, s.handleResumeInstance)
+	s.route("POST /v1/instances/{id}/migrate", RoleAdmin, s.handleMigrateInstance)
 	s.route("GET /v1/instances/{id}/history", RoleViewer, s.handleHistory)
 	s.route("GET /v1/instances/{id}/incidents", RoleViewer, s.handleInstanceIncidents)
 

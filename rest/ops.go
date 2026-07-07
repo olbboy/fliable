@@ -3,6 +3,8 @@ package rest
 import (
 	"errors"
 	"net/http"
+
+	"github.com/olbboy/fliable/engine"
 )
 
 func (s *Server) handleSuspendInstance(w http.ResponseWriter, r *http.Request) {
@@ -19,6 +21,26 @@ func (s *Server) handleResumeInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.json(w, http.StatusOK, map[string]string{"status": "resumed"})
+}
+
+// handleMigrateInstance validates (and unless dryRun, applies) a live
+// migration of one instance onto another definition version.
+func (s *Server) handleMigrateInstance(w http.ResponseWriter, r *http.Request) {
+	var plan engine.MigrationPlan
+	if err := decodeJSON(r, &plan); err != nil {
+		s.error(w, http.StatusBadRequest, err)
+		return
+	}
+	report, err := s.e.MigrateInstance(r.PathValue("id"), plan)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	code := http.StatusOK
+	if !report.Applied && !plan.DryRun {
+		code = http.StatusUnprocessableEntity // validation issues
+	}
+	s.json(w, code, report)
 }
 
 // batchReq is the body for POST /v1/batch/{op}.

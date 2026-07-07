@@ -335,4 +335,5 @@ const (
 	HistIncidentResolved   = "incident.resolved"
 	HistAgentInvoked       = "agent.invoked"
 	HistAgentCompleted     = "agent.completed"
+	HistInstanceMigrated   = "instance.migrated"
 )
