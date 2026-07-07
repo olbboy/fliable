@@ -4,6 +4,48 @@ All notable changes to Fliable are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the engine follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] — 2026-07-07
+
+Production-hardening, universal UI compatibility, and first-class AI agent
+orchestration — all added without pulling a single dependency into
+`go.mod` (Go standard library only, unchanged).
+
+### AI agents
+- Agent task type: an LLM-with-tools step that participates in the same
+  token model, retries and incident handling as any other task. New
+  `TokenWaitAgent` wait state with cancellation and resume.
+- Provider-agnostic `AgentInvoker` interface with MCP-native tool
+  descriptors — no model SDK in the core. Runs in-process **or** as an
+  external AI worker polling `/v1/agent-jobs` (fetch-and-lock).
+- Governance by event log: `agent.invoked` / `agent.completed` history
+  events capture prompt, tool calls and token usage.
+- Human-in-the-loop approval gate; structured output; BPMN-error routing;
+  per-agent invocation and token metrics.
+
+### Production & operations
+- Rich query API: variable predicates (`eq/ne/gt/gte/lt/lte/contains/exists`),
+  time windows, keyset (cursor) pagination and sort direction; paged
+  `{ items, nextCursor }` envelopes. No external index required.
+- Multi-tenancy: `TenantID` on every record; per-`(tenant, key)`
+  definition versioning; tenant-confined queries and REST.
+- Auth: pluggable `Authenticator` chain (API key / static bearer /
+  HMAC-SHA256 signed tokens via `MintToken`/`ParseToken`); per-route RBAC
+  (viewer / operator / admin); CORS middleware.
+- Suspend / resume instances; bulk operations.
+- History TTL housekeeping loop; `PurgeInstance` for GDPR-style deletes.
+- W3C Trace Context (`traceparent`) ingestion and propagation across
+  external and agent workers.
+
+### API & SDK
+- OpenAPI 3.1 document at `/openapi.json` with a dependency-free `/docs`
+  reference page.
+- New `@fliable/sdk` TypeScript package: framework-agnostic typed client
+  plus optional headless React hooks (data + handlers, no markup) so
+  shadcn/ui, Base UI, Vue, Svelte and Solid all bind to the same layer.
+  Zero runtime dependencies; React is an optional peer dep.
+- `docs/roadmap-alignment.md` maps delivered capabilities to the
+  Beat-Flowable roadmap domains and NFRs.
+
 ## [1.0.0] — 2026-07-07
 
 First stable release: a compact, high-efficiency BPMN 2.0 / DMN workflow

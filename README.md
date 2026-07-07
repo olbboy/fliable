@@ -30,6 +30,9 @@ Fliable was designed feature-by-feature to beat the classic Java engines (Flowab
 | History | event-sourced stream, queryable **and** live via server-sent events | history tables, polling |
 | Decisions (DMN) | 5 hit policies + aggregations, same sandboxed expressions | separate engine module |
 | Model migration | reads Flowable/Camunda/Activiti extension attributes and `${...}` expressions as-is | — |
+| AI agents | agent task is **just another token** — provider-agnostic, MCP-native, governed by the same event log; in-process or external AI worker | Spring AI, vendored providers, bolted on |
+| UI | headless-first: typed TypeScript SDK + React hooks (no markup) bind to any framework — shadcn, Base UI, Vue, Svelte | web apps you adopt wholesale |
+| Multi-tenancy & auth | tenant isolation, pluggable auth chain (API key / bearer / signed token), per-route RBAC, CORS — built in | add-on / commercial |
 | Validation | aggregate: every model problem reported in one pass | fail-fast, one error at a time |
 | Dependencies | **zero** (Go standard library only) | large dependency trees |
 
@@ -128,6 +131,73 @@ eng := engine.New(st, engine.WithDecisionEvaluator(reg))
 - `engine.OnEvent(...)` — the same stream in-process
 - structured logging via `log/slog`
 
+## AI agents as first-class tasks
+
+An **agent task** runs an LLM (with tools) as an ordinary step in a process
+or case — same token model, same retries, same incident handling as any
+other task. The engine stays **provider-agnostic and zero-dependency**: no
+model SDK lives in the core. You supply the intelligence two ways:
+
+- **In-process** — implement the `AgentInvoker` interface and register it.
+- **External AI worker** — poll `/v1/agent-jobs` (fetch-and-lock, like
+  external tasks) from a separate binary that calls Claude, GPT, or any
+  MCP toolchain, then complete the job over REST.
+
+Every invocation is **governed by the event log**: `agent.invoked` and
+`agent.completed` history events capture the prompt, tool calls and token
+usage, so decisions are auditable and reproducible. A **human-in-the-loop**
+approval gate can park an agent's proposal as a user task and release it
+only when an `approved` variable is set. Tool descriptors are **MCP-native**,
+so the same agent works against any Model Context Protocol server.
+
+```go
+eng := engine.New(st, engine.WithDefaultAgent(myInvoker)) // or leave agents to external workers
+```
+
+## Multi-tenancy, auth & security
+
+- **Tenancy** — every record carries a `TenantID`; definitions version per
+  `(tenant, key)`; queries and the REST layer confine callers to their tenant.
+- **AuthN** — a pluggable `Authenticator` chain: API keys, static bearer
+  tokens, or HMAC-SHA256 signed tokens (`MintToken`/`ParseToken`).
+- **AuthZ** — per-route RBAC across `viewer` / `operator` / `admin`.
+- **CORS** — configurable middleware for browser clients.
+- **Retention** — history TTL housekeeping and `PurgeInstance` for
+  GDPR-style deletes.
+- **Tracing** — W3C `traceparent` is ingested and propagated across
+  external and agent workers.
+
+## Query API
+
+Instances and tasks accept variable predicates, time windows, keyset
+(cursor) pagination and sort direction — no external index required:
+
+```bash
+curl "localhost:8080/v1/tasks?candidateGroup=fraud-team&var=amount:gte:500&limit=20"
+curl "localhost:8080/v1/instances?state=active&cursor=<nextCursor>&desc=true"
+```
+
+Responses are paged envelopes (`{ items, nextCursor }`). The full endpoint
+list is served as an **OpenAPI 3.1** document at `/openapi.json` with a
+dependency-free reference at `/docs`.
+
+## Any UI framework — headless TypeScript SDK
+
+Fliable ships no opinion about your frontend. The
+[`@fliable/sdk`](packages/sdk-ts) package is a **framework-agnostic** typed
+client plus optional **headless React hooks** that return *data and handlers
+only, no markup* — so shadcn/ui, Base UI, Radix, Vue, Svelte and Solid all
+bind to the same data layer.
+
+```tsx
+import { useTasks, useCompleteTask } from "@fliable/sdk/react";
+// bring your own <Button/> and <Card/> — the hook holds no markup
+const { data } = useTasks({ candidateGroup: "sales" }, { live: true });
+```
+
+See [packages/sdk-ts/README.md](packages/sdk-ts/README.md) for shadcn/ui and
+Base UI examples.
+
 ## Failures are never silent
 
 A failing service task retries with exponential backoff; exhausted retries raise an **incident** that parks the token, keeps the instance alive and shows up in `GET /v1/incidents`. Fix the cause, `POST /v1/incidents/{id}/resolve`, and execution resumes exactly where it stopped. Unhandled BPMN errors terminate the instance *with* an incident record — nothing disappears.
@@ -147,7 +217,9 @@ One "lifecycle" is the complete journey — start event, script task with expres
 - [Architecture](docs/architecture.md) — execution model, locking, persistence, determinism
 - [BPMN coverage & semantics](docs/bpmn-coverage.md)
 - [Expression language](docs/expressions.md)
-- [REST API reference](docs/rest-api.md)
+- [REST API reference](docs/rest-api.md) — plus live OpenAPI 3.1 at `/openapi.json` and `/docs`
+- [Roadmap alignment](docs/roadmap-alignment.md) — production, UI compatibility & AI integration mapped to capabilities
+- [TypeScript SDK](packages/sdk-ts/README.md) — headless client + React hooks for any UI framework
 
 ## Repository layout
 
@@ -157,8 +229,9 @@ expr/     sandboxed expression language
 store/    persistence: interface, memory store, durable journal store
 engine/   the token-based process engine
 dmn/      decision tables
-rest/     HTTP API + SSE + metrics
+rest/     HTTP API + SSE + metrics + auth/RBAC + CORS + OpenAPI
 cmd/      the fliable binary
+packages/ headless TypeScript SDK (@fliable/sdk) for any UI framework
 examples/ runnable examples and sample models
 docs/     architecture & reference documentation
 ```
